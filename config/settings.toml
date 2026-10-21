@@ -40,9 +40,20 @@ optout_command = true
 # An empty list means Manage Server is enough. Override this in settings.local.toml.
 admin_roles = []
 
-# public: knowledge files answer members directly.
-# approval: every knowledge file waits for an officer, unless a file says visibility: public.
-docs_visibility = "public"
+# Access tiers, lowest first. A person's tier is the highest tier among their roles.
+# A knowledge file's tier: line selects one of these names. An older visibility: public
+# line means the lowest tier.
+tiers = ["non-member", "member", "officer", "executive"]
+
+# Role names or role ids for each tier. Put this server's roles in settings.local.toml.
+# [tier_roles]
+# member = ["Members"]
+# officer = ["Officers", "123456789012345678"]
+
+# Channel name or id to a tier. When a channel is missing, its tier is the lowest
+# tier among roles that can view it.
+# [channel_tiers]
+# "officers" = "officer"
 
 # Append "Based on: <title or #channel>, <date>" to answers.
 cite_sources = true

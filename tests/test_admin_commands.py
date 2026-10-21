@@ -83,7 +83,9 @@ def test_admin_group_replaces_top_level_reload(tmp_path, monkeypatch):
     assert admin.default_permissions.manage_guild
     assert admin.guild_only is True
     children = {command.name: command for command in admin.commands}
-    assert set(children) == {"blocklist", "approvals", "optout", "member", "bot"}
+    assert set(children) == {"blocklist", "approvals", "optout", "member", "bot", "tier"}
+    tier = children["tier"]
+    assert {command.name for command in tier.commands} == {"set-channel", "set-role", "show"}
     assert all(isinstance(command, discord.app_commands.Group) for command in admin.commands)
     payload = admin.to_dict(bot.tree)
     assert payload["default_member_permissions"] == discord.Permissions(manage_guild=True).value

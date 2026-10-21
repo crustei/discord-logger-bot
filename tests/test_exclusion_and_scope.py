@@ -44,7 +44,9 @@ def test_shipped_config_is_generic_with_an_empty_blocklist(tmp_path):
     assert not is_excluded(None, "#Private-Channel", runtime.blocklist)
     assert runtime.ask_description() == "Ask about My Org"
     assert len(runtime.ask_description()) <= 100
-    assert runtime.docs_visibility == "public"
+    assert runtime.tiers == ["non-member", "member", "officer", "executive"]
+    assert runtime.tier_roles == {tier: [] for tier in runtime.tiers}
+    assert runtime.channel_tiers == {}
     assert runtime.cite_sources is True
     assert runtime.admin_roles == []
 

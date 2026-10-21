@@ -16,6 +16,7 @@ import tomllib
 from pathlib import Path
 
 from blocklist import Blocklist, blocklist_from_settings
+from tiers import parse_channel_tiers, parse_tier_roles, parse_tiers
 
 ROOT = Path(__file__).resolve().parent
 
@@ -110,13 +111,6 @@ DEFAULT_SENSITIVE = (
     "social security",
     "home address",
 )
-
-
-def _visibility(value) -> str:
-    text = str(value or "").strip().casefold()
-    if text == "approval":
-        return "approval"
-    return "public"
 
 
 def _role_list(value) -> list[str]:
@@ -217,7 +211,9 @@ class RuntimeConfig:
         self.terms_url = ""
         self.privacy_url = ""
         self.admin_roles: list[str] = []
-        self.docs_visibility = "public"
+        self.tiers = parse_tiers(None)
+        self.tier_roles = parse_tier_roles(None, self.tiers)
+        self.channel_tiers = parse_channel_tiers(None, self.tiers)
         self.cite_sources = True
         self.officer_role = "an officer"
         self.officer_channel = ""
@@ -278,7 +274,9 @@ class RuntimeConfig:
         self.terms_url = _http_url(data.get("terms_url"))
         self.privacy_url = _http_url(data.get("privacy_url"))
         self.admin_roles = _role_list(data.get("admin_roles"))
-        self.docs_visibility = _visibility(data.get("docs_visibility"))
+        self.tiers = parse_tiers(data.get("tiers"))
+        self.tier_roles = parse_tier_roles(data.get("tier_roles"), self.tiers)
+        self.channel_tiers = parse_channel_tiers(data.get("channel_tiers"), self.tiers)
         self.cite_sources = _bool(data.get("cite_sources"), True)
         self.officer_role = _one_line(data.get("officer_role"), "an officer", 80)
         self.officer_channel = _one_line(data.get("officer_channel"), "", 80).lstrip("#")

@@ -103,6 +103,63 @@ def safe_to_auto_post(
     return channel_visible(channel_id, channel_name, set(here) | set(public))
 
 
+def role_tokens(member) -> list[str]:
+    """Role ids and names for tier matching. Missing roles yield an empty list."""
+    tokens: list[str] = []
+    for role in list(getattr(member, "roles", []) or []):
+        role_id = getattr(role, "id", None)
+        name = getattr(role, "name", None)
+        if role_id is not None and str(role_id).strip():
+            tokens.append(str(role_id))
+        if name and str(name).strip():
+            tokens.append(str(name))
+    return tokens
+
+
+def _iter_guild_channels(guild):
+    channels = list(getattr(guild, "channels", []) or [])
+    threads = list(getattr(guild, "threads", []) or [])
+    seen = []
+    for channel in channels:
+        seen.append(channel)
+        for thread in list(getattr(channel, "threads", []) or []):
+            seen.append(thread)
+    seen.extend(threads)
+    return seen
+
+
+def guild_channel_viewers(guild) -> dict[str, list[tuple[str, str, bool]]]:
+    """Channel id and name to ``(role id, role name, can view)`` for every role.
+
+    A channel whose permissions cannot be read is left out. Callers then treat
+    that channel as the lowest tier unless ``channel_tiers`` names it.
+    """
+    if guild is None:
+        return {}
+    roles = list(getattr(guild, "roles", []) or [])
+    found: dict[str, list[tuple[str, str, bool]]] = {}
+    for channel in _iter_guild_channels(guild):
+        viewers: list[tuple[str, str, bool]] = []
+        checked = False
+        for role in roles:
+            try:
+                perms = channel.permissions_for(role)
+                can_view = bool(getattr(perms, "view_channel", False))
+            except Exception:
+                continue
+            checked = True
+            viewers.append((str(getattr(role, "id", "")), str(getattr(role, "name", "")), can_view))
+        if not checked:
+            continue
+        channel_id = getattr(channel, "id", None)
+        if channel_id is not None:
+            found[str(channel_id)] = viewers
+        name = getattr(channel, "name", None)
+        if name and str(name).strip():
+            found[str(name).strip().lstrip("#").casefold()] = viewers
+    return found
+
+
 def visible_channel_ids(guild, member) -> set[str]:
     """Channel ids this member can view. Fail closed if guild or member is missing.
 

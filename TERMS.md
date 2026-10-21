@@ -1,47 +1,49 @@
 # Terms of Service
 
-**Effective date:** {effective_date}
+**Effective date:** <EFFECTIVE_DATE>
+**Operator:** <ORG_NAME>
+**Contact:** <OPERATOR_CONTACT>
 
-**Operator:** {org_name}
+This is a plain-language template for a self-hosted Discord bot, not legal advice. Replace every `<PLACEHOLDER>` before you publish it. The bot does not fill them in.
 
-**Contact:** {operator_contact}
+## What's new
 
-This is a plain-language template for a self-hosted Discord bot, not legal advice. Replace `{org_name}`, `{operator_contact}`, and `{effective_date}` before you publish it. The bot does not fill those placeholders in. Have someone qualified review the page if you need terms you can rely on.
-
-These terms are between you and {org_name}, the person or group who runs this bot. They cover use of the bot on Discord. Discord's own terms still apply to your Discord account and to the server.
+- Questions and answers are logged anonymously to improve answers (no asker, no channel).
+- Answers are limited by access tiers based on your roles and the channels you can view.
+- The operator may import older server history through the official bot API.
 
 ## What the bot is
 
-The bot logs messages in servers where it has been invited, and it answers when someone uses `/ask` or @mentions it. It does not post on its own. Some answers wait for an officer of {org_name} to approve them.
-
-{org_name} hosts the bot and the database. The software in this repository is the tool they run. These terms are not a license for that software.
+The bot logs messages through Discord's official bot API and answers when someone uses `/ask` or mentions it. It does not post on its own. <ORG_NAME> hosts the bot and its database. Discord's own terms still apply.
 
 ## Using the bot
 
-You can use `/ask` and @mentions in channels where the bot is allowed to answer. You do not have to use it. {org_name} can stop answering, change which channels are logged, or remove the bot from the server.
-
-Do not use the bot to break the law or Discord's rules. Do not try to pull private channels into an answer by asking the bot to ignore its limits.
+You can use `/ask` and mentions where the bot is allowed to answer. Do not use it to break the law or Discord's rules, and do not try to get it to reveal channels or files above your access tier.
 
 ## Answers
 
-Answers are short notes drawn from logged messages and from files the operator placed in the bot's notes folder. They can be incomplete or wrong. An answer is not an official decision of {org_name} unless an officer says it is. Do not treat an answer as professional advice.
+Answers are short paraphrases drawn from stored messages and the operator's knowledge files. They are written by a language model from <LLM_PROVIDER>, chosen by the operator, and your question plus short excerpts are sent to that provider. Answers can be wrong or incomplete. They are not official decisions of <ORG_NAME> and are not professional advice. Some answers wait for an officer's approval.
 
-If an answer would use someone else's messages, your messages from another channel, or an operator note, the bot holds it until an officer approves or denies it. The held notice does not include those messages.
+## Access tiers
 
-## Your messages
+What an answer can draw on depends on your tier (set from your roles) and the channels you can view. The operator sets the tiers and can change them.
 
-Sending a message in a logged channel stores a copy on the operator's computer, as described in the privacy policy. Channels on the operator's blocklist are not stored.
+## Your data
 
-You can opt out of logging. When {org_name} leaves the command enabled, run `/optout` in the server. Otherwise ask {operator_contact}. Opting out stops this bot from storing your messages, edits, member snapshots, and member events, deletes the copies it already has, and keeps your older messages out of answers. You can still use `/ask`. Opting out does not remove the original messages from Discord. Asking {operator_contact} is how you opt back in. The privacy policy has the details.
+Messages in logged channels are stored as described in the privacy policy. Questions are logged anonymously. You can opt out with `/optout` or by asking <OPERATOR_CONTACT>. Deletion requests go to <OPERATOR_CONTACT>.
 
-## Stopping
+## Admin commands
 
-{org_name} can shut the bot down or change these terms. If the terms change, the effective date at the top changes with them. Continuing to use the bot after that date means you accept the new terms. If you do not accept them, stop using the bot and ask {operator_contact} about data already stored.
+`/admin` is for people with the Manage Server permission. Admins can manage the blocklist, tiers, approvals, and member data.
+
+## Changes and stopping
+
+<ORG_NAME> can change these terms or shut the bot down. When the terms change, the effective date changes and "What's new" is updated. Continuing to use the bot after that means you accept the new terms.
 
 ## No warranty
 
-The bot is provided as {org_name} runs it. Answers can fail, the logger can miss a message, and the service can stop. {org_name} is not promising that the bot will be available or that an answer will be correct.
+The bot is provided as is. It may miss messages, give wrong answers, or stop working.
 
 ## Contact
 
-Questions about these terms: {operator_contact}.
+Questions: <OPERATOR_CONTACT>.

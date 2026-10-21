@@ -1,6 +1,6 @@
 """Synthesized answers, knowledge-file visibility, and doc-first ranking."""
 
-from answerstyle import doc_is_public, redact_pii, synthesize, verbatim_overlap
+from answerstyle import redact_pii, synthesize, verbatim_overlap
 from qa import handle_question
 from retrieve import Hit, merge_hits
 from tests.conftest import add
@@ -53,7 +53,7 @@ def test_facts_rank_ahead_of_the_askers_messages():
 def test_public_knowledge_answers_directly_and_beats_a_newer_message(db, tmp_path):
     runtime = _runtime(
         tmp_path,
-        'docs_visibility = "public"\ncite_sources = true\nofficer_role = "an officer"\n',
+        'cite_sources = true\nofficer_role = "an officer"\n',
     )
     docs = tmp_path / "notes"
     docs.mkdir()
@@ -86,53 +86,6 @@ def test_public_knowledge_answers_directly_and_beats_a_newer_message(db, tmp_pat
     assert result.context_block.find("1 November 2026") < result.context_block.find("December")
     assert result.snippets[0].kind == "doc"
     assert "December" not in result.text
-
-
-def test_approval_visibility_holds_a_doc_unless_the_file_says_public(db, tmp_path):
-    runtime = _runtime(tmp_path, 'docs_visibility = "approval"\n')
-    docs = tmp_path / "notes"
-    docs.mkdir()
-    note = docs / "facts.md"
-    note.write_text(
-        "---\ntitle: Key facts\nvisibility: approval\n---\n\nRecruitment applications open on 1 November 2026.\n",
-        encoding="utf-8",
-    )
-    held = handle_question(
-        db,
-        "When is recruitment?",
-        asker_id="1001",
-        channel_id="10",
-        channel_name="general",
-        visible={"10", "general"},
-        here={"10", "general"},
-        excluded=runtime.blocklist,
-        docs_dir=str(docs),
-        llm=Recording(),
-        runtime=runtime,
-    )
-    assert held.kind == "pending"
-    assert held.llm_called is False
-    assert doc_is_public(held.snippets[0], "approval") is False
-
-    note.write_text(
-        "---\ntitle: Key facts\nvisibility: public\n---\n\nRecruitment applications open on 1 November 2026.\n",
-        encoding="utf-8",
-    )
-    direct = handle_question(
-        db,
-        "When is recruitment?",
-        asker_id="1001",
-        channel_id="10",
-        channel_name="general",
-        visible={"10", "general"},
-        here={"10", "general"},
-        excluded=runtime.blocklist,
-        docs_dir=str(docs),
-        llm=Recording(),
-        runtime=runtime,
-    )
-    assert direct.kind == "answer"
-    assert "1 November 2026" in direct.context_block
 
 
 class Scripted:

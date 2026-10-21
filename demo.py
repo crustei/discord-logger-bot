@@ -32,6 +32,9 @@ from llm import ExtractiveProvider, provider_from_env
 from permissions import norm_name
 from qa import Result, handle_question
 from voice import get_runtime
+from asklog import record
+
+LOG_QUESTIONS = False  # set by --log
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE_DB = ROOT / "sample" / "sample.db"
@@ -131,6 +134,8 @@ def ask(
     llm,
     dry_run: bool,
     apply_sample_blocklist: bool = False,
+    roles: list[str] | None = None,
+    tier_roles=None,
 ) -> Result:
     asker_id, asker_name = resolve_asker(conn, asker)
     visible, resolved = channel_keys(conn, channels)
@@ -144,7 +149,7 @@ def ask(
     excluded = runtime.blocklist
     if apply_sample_blocklist:
         excluded = excluded.union(sample_blocklist())
-    return handle_question(
+    result = handle_question(
         conn,
         question,
         asker_id=asker_id,
@@ -159,7 +164,12 @@ def ask(
         llm=llm,
         dry_run=dry_run,
         runtime=runtime,
+        asker_roles=list(roles or []),
+        tier_roles=tier_roles,
     )
+    if LOG_QUESTIONS:
+        record(conn, question, result, asker_id=asker_id)
+    return result
 
 
 def open_database(path: str | None) -> tuple[object, str]:
@@ -252,8 +262,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--public", help="Comma-separated public channels. Default: config/settings.toml")
     parser.add_argument("--dry-run", action="store_true", help="Show context and decision without calling the model")
     parser.add_argument("--provider", choices=["auto", "extractive", "openai"], default="auto")
+    parser.add_argument("--log", action="store_true", help="Write each question and answer to the anonymous ask_log table in --db")
     parser.add_argument("question", nargs="*", help="Question. Omit it for the interactive REPL.")
     args = parser.parse_args(argv)
+    global LOG_QUESTIONS
+    LOG_QUESTIONS = bool(args.log)
     conn, label = open_database(args.db)
     args._db_label = label
     args._sample = args.db is None

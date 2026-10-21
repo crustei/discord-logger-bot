@@ -8,6 +8,7 @@ child of /admin is a subgroup:
 - /admin optout add|remove|list
 - /admin member forget
 - /admin bot status|reload|set-status
+- /admin tier set-channel|set-role|show
 
 ``default_permissions`` is Manage Server on the top group. Each callback also
 checks Manage Server and, when ``admin_roles`` is non-empty, a role name or
@@ -41,6 +42,7 @@ from db import (
     resolve_approval,
 )
 from qa import utcnow
+from tiers import TierError, assign_role_tier, format_tiers, set_channel_tier
 from voice import _one_line, get_runtime
 
 log = logging.getLogger("qa_bot")
@@ -530,10 +532,70 @@ async def bot_set_status(bot, interaction, text: str):
     await send(interaction, f"Status set to: {stored}")
 
 
+async def tier_set_channel(bot, interaction, channel, tier: str):
+    if not await require_admin(bot, interaction, "tier.set-channel"):
+        return
+    runtime = get_runtime()
+    runtime.reload_if_changed()
+    channel_id = str(channel.id) if channel is not None else None
+    name = getattr(channel, "name", None) if channel is not None else None
+    try:
+        text = set_channel_tier(
+            runtime.local_settings_path,
+            tier,
+            channel_id=channel_id,
+            channel_name=name,
+            tiers=runtime.tiers,
+            channel_tiers=runtime.channel_tiers,
+        )
+    except TierError as exc:
+        audit(bot, interaction, "tier.set-channel", f"failed: {exc}")
+        await send(interaction, str(exc))
+        return
+    runtime.reload()
+    audit(bot, interaction, "tier.set-channel", text)
+    await send(interaction, text)
+
+
+async def tier_set_role(bot, interaction, role, tier: str):
+    if not await require_admin(bot, interaction, "tier.set-role"):
+        return
+    runtime = get_runtime()
+    runtime.reload_if_changed()
+    role_id = str(role.id) if role is not None else None
+    name = getattr(role, "name", None) if role is not None else None
+    try:
+        text = assign_role_tier(
+            runtime.local_settings_path,
+            tier,
+            role_id=role_id,
+            role_name=name,
+            tiers=runtime.tiers,
+            tier_roles=runtime.tier_roles,
+        )
+    except TierError as exc:
+        audit(bot, interaction, "tier.set-role", f"failed: {exc}")
+        await send(interaction, str(exc))
+        return
+    runtime.reload()
+    audit(bot, interaction, "tier.set-role", text)
+    await send(interaction, text)
+
+
+async def tier_show(bot, interaction):
+    if not await require_admin(bot, interaction, "tier.show"):
+        return
+    runtime = get_runtime()
+    runtime.reload()
+    text = format_tiers(runtime)
+    audit(bot, interaction, "tier.show", "ok")
+    await send(interaction, text)
+
+
 def register_admin_commands(bot) -> None:
     admin = app_commands.Group(
         name="admin",
-        description="Officer tools for the blocklist, approvals, and settings",
+        description="Officer tools for the blocklist, approvals, tiers, and settings",
         default_permissions=discord.Permissions(manage_guild=True),
         guild_only=True,
     )
@@ -628,9 +690,33 @@ def register_admin_commands(bot) -> None:
         async def set_status(self, interaction: discord.Interaction, text: str):
             await bot_set_status(bot, interaction, text)
 
+    class TierGroup(app_commands.Group):
+        def __init__(self):
+            super().__init__(name="tier", description="Map roles and channels to access tiers")
+
+        @app_commands.command(name="set-channel", description="Set the access tier for a channel")
+        @app_commands.describe(channel="Channel to map", tier="Tier name from settings")
+        async def set_channel(
+            self,
+            interaction: discord.Interaction,
+            channel: discord.app_commands.AppCommandChannel,
+            tier: str,
+        ):
+            await tier_set_channel(bot, interaction, channel, tier)
+
+        @app_commands.command(name="set-role", description="Map a role to an access tier")
+        @app_commands.describe(role="Role to map", tier="Tier name from settings")
+        async def set_role(self, interaction: discord.Interaction, role: discord.Role, tier: str):
+            await tier_set_role(bot, interaction, role, tier)
+
+        @app_commands.command(name="show", description="Show tiers, role mappings, and channel mappings")
+        async def show(self, interaction: discord.Interaction):
+            await tier_show(bot, interaction)
+
     admin.add_command(BlocklistGroup())
     admin.add_command(ApprovalsGroup())
     admin.add_command(OptoutGroup())
     admin.add_command(MemberGroup())
     admin.add_command(BotGroup())
+    admin.add_command(TierGroup())
     bot.tree.add_command(admin)

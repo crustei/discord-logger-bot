@@ -1,11 +1,10 @@
 """Decide whether a question is answered, held, or empty, then build a short reply.
 
 General questions (dates, events, how-tos, team structure) are answered from
-the knowledge directory and from channels the asker can see. Knowledge files
-answer directly unless ``docs_visibility`` or a file's ``visibility`` front
-matter says ``approval``. Questions about a specific person's private
-information wait for an officer. Blocklisted channels and opted-out members
-are never retrieved.
+the knowledge directory and from channels the asker can see. A hit is used
+only when its tier is at or below the asker's tier. Questions about a
+specific person's private information wait for an officer. Blocklisted
+channels and opted-out members are never retrieved.
 
 The model only receives the string from ``select_context``. A reply that copies
 those snippets is sent back once to be rephrased. Words are not deleted from
@@ -21,6 +20,7 @@ from db import connect, create_approval
 from llm import ExtractiveProvider, LLMError
 from permissions import is_excluded, message_in_scope
 from retrieve import Hit, merge_hits, select_context
+from tiers import asker_tier_index, hit_within_tier
 from voice import RuntimeConfig, get_runtime
 
 
@@ -94,6 +94,23 @@ def explain(kind: str, asker_id: str, review: list[Hit]) -> str:
     return "Held for approval because the question asks about someone's private information."
 
 
+def _within_tier(
+    hit,
+    runtime: RuntimeConfig,
+    asker_index: int,
+    channel_viewers,
+    tier_roles=None,
+) -> bool:
+    return hit_within_tier(
+        hit,
+        asker_index=asker_index,
+        tiers=runtime.tiers,
+        tier_roles=runtime.tier_roles if tier_roles is None else tier_roles,
+        channel_tiers=runtime.channel_tiers,
+        channel_viewers=channel_viewers,
+    )
+
+
 def split_for_answer(
     found,
     *,
@@ -104,13 +121,18 @@ def split_for_answer(
     runtime: RuntimeConfig | None = None,
     here: set[str] | None = None,
     public: set[str] | None = None,
+    asker_index: int = 0,
+    channel_viewers=None,
+    tier_roles=None,
 ) -> tuple[list[Hit], list[Hit]]:
-    """Public knowledge and general notes answer now. Private questions wait.
+    """Notes the asker may see answer now. Private questions wait.
 
     ``here`` and ``public`` are accepted so older callers keep working. Ranking
-    no longer limits an automatic answer to the asker's own messages.
+    no longer limits an automatic answer to the asker's own messages. Hits
+    above ``asker_index`` are dropped before ranking, so they cannot reach
+    the model or the approval queue.
     """
-    from answerstyle import about_self, asks_for_private_detail, doc_is_public
+    from answerstyle import about_self, asks_for_private_detail
     from retrieve import order_messages
 
     runtime = runtime or get_runtime()
@@ -124,33 +146,32 @@ def split_for_answer(
             guild_id=hit.guild_id,
         ):
             continue
+        if not _within_tier(hit, runtime, asker_index, channel_viewers, tier_roles):
+            continue
         if (hit.text or "").strip():
             messages.append(hit)
-    public_docs: list[Hit] = []
-    held_docs: list[Hit] = []
+    docs: list[Hit] = []
     for hit in found.docs:
         if not (hit.text or "").strip():
             continue
-        if doc_is_public(hit, runtime.docs_visibility):
-            public_docs.append(hit)
-        else:
-            held_docs.append(hit)
+        if not _within_tier(hit, runtime, asker_index, channel_viewers, tier_roles):
+            continue
+        docs.append(hit)
     # "What did I say" stays on that member's messages. General questions merge
     # knowledge files in front of chat, instead of preferring the asker's rows.
     if about_self(question):
         ranked = order_messages(messages, question)
     else:
-        ranked = merge_hits(public_docs, messages, prefer_docs=True, question=question)
+        ranked = merge_hits(docs, messages, prefer_docs=True, question=question)
     private = asks_for_private_detail(
         question,
         runtime.sensitive_topics,
-        ranked + held_docs,
+        ranked,
         asker_id,
-        runtime.docs_visibility,
     )
     if private:
         review = merge_hits(
-            public_docs + held_docs,
+            docs,
             messages,
             prefer_docs=not about_self(question),
             question=question,
@@ -158,7 +179,7 @@ def split_for_answer(
         return [], review
     if ranked:
         return ranked, []
-    return [], held_docs
+    return [], []
 
 
 def compose_answer(
@@ -227,6 +248,9 @@ def handle_question(
     llm=None,
     dry_run: bool = False,
     runtime: RuntimeConfig | None = None,
+    asker_roles: list[str] | None = None,
+    channel_viewers=None,
+    tier_roles=None,
 ) -> Result:
     from retrieve import retrieve
 
@@ -259,6 +283,12 @@ def handle_question(
             text=clip(runtime.say("empty_question"), limit),
         )
     scope = set(visible) | set(here) | set(public_channels)
+    role_map = runtime.tier_roles if tier_roles is None else tier_roles
+    asker_index = asker_tier_index(asker_roles, runtime.tiers, role_map)
+
+    def allow(hit) -> bool:
+        return _within_tier(hit, runtime, asker_index, channel_viewers, role_map)
+
     found = retrieve(
         conn,
         question,
@@ -267,6 +297,7 @@ def handle_question(
         excluded=excluded,
         docs_dir=docs_dir,
         llm=None if dry_run else llm,
+        allow=allow,
     )
     auto, review = split_for_answer(
         found,
@@ -277,6 +308,9 @@ def handle_question(
         runtime=runtime,
         here=set(here),
         public=set(public_channels),
+        asker_index=asker_index,
+        channel_viewers=channel_viewers,
+        tier_roles=role_map,
     )
     if auto:
         kept, block = select_context(auto, limit=runtime.max_context_snippets)

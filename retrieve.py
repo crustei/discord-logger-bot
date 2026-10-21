@@ -324,70 +324,87 @@ def search_messages(
     author_mode: str,
     limit: int = CANDIDATE_POOL,
     match_question: str | None = None,
+    allow=None,
 ) -> list[Hit]:
-    """FTS5 candidates inside the allowed channels. ``author_mode`` is ``only`` or ``exclude``."""
-    if not asker_id:
-        return []
-    expr = match_expr(match_question or question, ("content",))
-    if not expr:
-        return []
-    allowed = allowed_channel_ids(conn, scope, excluded)
-    if not allowed:
-        return []
-    guilds = _channel_guilds(conn)
-    placeholders = ",".join("?" * len(allowed))
-    sql = (
-        "SELECT message_id, channel_id, channel_name, author_id, author_name, display_name, "
-        "timestamp, content, bm25(messages_fts) AS score "
-        "FROM messages_fts WHERE messages_fts MATCH ? "
-        f"AND channel_id IN ({placeholders}) "
-    )
-    params: list = [expr, *allowed]
-    if author_mode == "only":
-        sql += "AND author_id = ? "
-        params.append(str(asker_id))
-    else:
-        sql += "AND author_id IS NOT NULL AND author_id != ? "
-        params.append(str(asker_id))
-    sql += "AND IFNULL(author_id, '') NOT IN (SELECT user_id FROM opt_outs) "
-    sql += "ORDER BY score LIMIT ?"
-    params.append(int(limit))
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    hits: list[Hit] = []
-    for row in rows:
-        # Defense in depth: the SQL channel list is already filtered.
-        guild_id = guilds.get(row["channel_id"])
-        if not message_in_scope(
-            row["channel_id"],
-            row["channel_name"],
-            scope=scope,
-            excluded=excluded,
-            guild_id=guild_id,
-        ):
-            continue
-        if author_mode == "only" and str(row["author_id"]) != str(asker_id):
-            continue
-        if author_mode == "exclude" and str(row["author_id"]) == str(asker_id):
-            continue
-        if is_opted_out(conn, row["author_id"]):
-            continue
-        hits.append(
-            Hit(
-                kind="message",
-                text=row["content"] or "",
-                channel_id=row["channel_id"],
-                channel_name=row["channel_name"],
-                guild_id=guild_id,
-                author_id=row["author_id"],
-                author=row["display_name"] or row["author_name"],
-                timestamp=row["timestamp"],
-                message_id=row["message_id"],
-                score=float(row["score"] or 0),
-            )
+    """FTS5 candidates inside the allowed channels. ``author_mode`` is ``only`` or ``exclude``.
+
+    ``allow`` drops hits before the snippet cap. When it rejects part of the
+    first pool, a wider pool is fetched so a higher tier cannot crowd out a
+    note the asker is allowed to see.
+    """
+
+    def collect(pool: int) -> list[Hit]:
+        if not asker_id:
+            return []
+        expr = match_expr(match_question or question, ("content",))
+        if not expr:
+            return []
+        allowed = allowed_channel_ids(conn, scope, excluded)
+        if not allowed:
+            return []
+        guilds = _channel_guilds(conn)
+        placeholders = ",".join("?" * len(allowed))
+        sql = (
+            "SELECT message_id, channel_id, channel_name, author_id, author_name, display_name, "
+            "timestamp, content, bm25(messages_fts) AS score "
+            "FROM messages_fts WHERE messages_fts MATCH ? "
+            f"AND channel_id IN ({placeholders}) "
         )
+        params: list = [expr, *allowed]
+        if author_mode == "only":
+            sql += "AND author_id = ? "
+            params.append(str(asker_id))
+        else:
+            sql += "AND author_id IS NOT NULL AND author_id != ? "
+            params.append(str(asker_id))
+        sql += "AND IFNULL(author_id, '') NOT IN (SELECT user_id FROM opt_outs) "
+        sql += "ORDER BY score LIMIT ?"
+        params.append(int(pool))
+        try:
+            rows = conn.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        hits: list[Hit] = []
+        for row in rows:
+            # Defense in depth: the SQL channel list is already filtered.
+            guild_id = guilds.get(row["channel_id"])
+            if not message_in_scope(
+                row["channel_id"],
+                row["channel_name"],
+                scope=scope,
+                excluded=excluded,
+                guild_id=guild_id,
+            ):
+                continue
+            if author_mode == "only" and str(row["author_id"]) != str(asker_id):
+                continue
+            if author_mode == "exclude" and str(row["author_id"]) == str(asker_id):
+                continue
+            if is_opted_out(conn, row["author_id"]):
+                continue
+            hits.append(
+                Hit(
+                    kind="message",
+                    text=row["content"] or "",
+                    channel_id=row["channel_id"],
+                    channel_name=row["channel_name"],
+                    guild_id=guild_id,
+                    author_id=row["author_id"],
+                    author=row["display_name"] or row["author_name"],
+                    timestamp=row["timestamp"],
+                    message_id=row["message_id"],
+                    score=float(row["score"] or 0),
+                )
+            )
+        return hits
+
+    hits = collect(limit)
+    if allow is not None:
+        kept = [hit for hit in hits if allow(hit)]
+        if len(kept) != len(hits):
+            wider = max(int(limit) * 4, int(limit))
+            kept = [hit for hit in collect(wider) if allow(hit)]
+        hits = kept
     return _show_snippets(_keep_best(hits, question), question)
 
 
@@ -530,7 +547,17 @@ def _show_snippets(hits: list[Hit], question: str) -> list[Hit]:
     return shown
 
 
-def retrieve(conn, question: str, *, asker_id: str, scope: set[str], excluded, docs_dir: str, llm=None) -> Retrieval:
+def retrieve(
+    conn,
+    question: str,
+    *,
+    asker_id: str,
+    scope: set[str],
+    excluded,
+    docs_dir: str,
+    llm=None,
+    allow=None,
+) -> Retrieval:
     question = question_without_excluded_names(question, excluded)
     match_question = expanded_question(question, llm)
     own = search_messages(
@@ -541,6 +568,7 @@ def retrieve(conn, question: str, *, asker_id: str, scope: set[str], excluded, d
         asker_id=asker_id,
         author_mode="only",
         match_question=match_question,
+        allow=allow,
     )
     others = search_messages(
         conn,
@@ -550,8 +578,9 @@ def retrieve(conn, question: str, *, asker_id: str, scope: set[str], excluded, d
         asker_id=asker_id,
         author_mode="exclude",
         match_question=match_question,
+        allow=allow,
     )
-    docs = search_docs(conn, question, docs_dir, match_question=match_question)
+    docs = search_docs(conn, question, docs_dir, match_question=match_question, allow=allow)
     return Retrieval(own=own, others=others, docs=docs)
 
 
@@ -754,7 +783,9 @@ def refresh_docs(conn, docs_dir: str) -> None:
         file_title = meta.get("title") or ""
         modified = meta.get("modified") or _as_of_date(body)
         source = meta.get("source") or ""
-        visibility = meta.get("visibility") or ""
+        # ``tier`` replaces the older visibility line. The column still holds
+        # whichever string the file set, and the answer path resolves it.
+        visibility = meta.get("tier") or meta.get("visibility") or ""
         for heading, chunk in _chunks(body, per_line=line_chunk_file(path, file_title, body)):
             title = file_title or heading or path.stem
             rows.append((display, title, chunk, modified, source, visibility))
@@ -769,35 +800,48 @@ def search_docs(
     docs_dir: str,
     limit: int = CANDIDATE_POOL,
     match_question: str | None = None,
+    allow=None,
 ) -> list[Hit]:
-    if not docs_dir or not os.path.isdir(docs_dir):
-        return []
-    refresh_docs(conn, docs_dir)
-    expr = match_expr(match_question or question, ("content", "title"))
-    if not expr:
-        return []
-    try:
-        rows = conn.execute(
-            """SELECT path, title, content, modified, source, visibility,
-                      bm25(docs_fts, 6.0, 1.0) AS score
-               FROM docs_fts WHERE docs_fts MATCH ?
-               ORDER BY score LIMIT ?""",
-            (expr, int(limit)),
-        ).fetchall()
-    except sqlite3.OperationalError:
-        return []
-    hits: list[Hit] = []
-    for row in rows:
-        hits.append(
-            Hit(
-                kind="doc",
-                text=row["content"] or "",
-                path=row["path"],
-                title=row["title"],
-                modified=row["modified"] or None,
-                source=row["source"] or None,
-                visibility=row["visibility"] or None,
-                score=float(row["score"] or 0),
+    """Knowledge-file hits. ``allow`` works the same way as in ``search_messages``."""
+
+    def collect(pool: int) -> list[Hit]:
+        if not docs_dir or not os.path.isdir(docs_dir):
+            return []
+        refresh_docs(conn, docs_dir)
+        expr = match_expr(match_question or question, ("content", "title"))
+        if not expr:
+            return []
+        try:
+            rows = conn.execute(
+                """SELECT path, title, content, modified, source, visibility,
+                          bm25(docs_fts, 6.0, 1.0) AS score
+                   FROM docs_fts WHERE docs_fts MATCH ?
+                   ORDER BY score LIMIT ?""",
+                (expr, int(pool)),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+        hits: list[Hit] = []
+        for row in rows:
+            hits.append(
+                Hit(
+                    kind="doc",
+                    text=row["content"] or "",
+                    path=row["path"],
+                    title=row["title"],
+                    modified=row["modified"] or None,
+                    source=row["source"] or None,
+                    visibility=row["visibility"] or None,
+                    score=float(row["score"] or 0),
+                )
             )
-        )
+        return hits
+
+    hits = collect(limit)
+    if allow is not None:
+        kept = [hit for hit in hits if allow(hit)]
+        if len(kept) != len(hits):
+            wider = max(int(limit) * 4, int(limit))
+            kept = [hit for hit in collect(wider) if allow(hit)]
+        hits = kept
     return _show_snippets(_keep_best(hits, question), question)
