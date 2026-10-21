@@ -2,8 +2,13 @@
 # settings.local.toml is gitignored. Keys here replace the same keys in
 # config/settings.toml. blocklist.guilds entries are merged by guild id.
 # The bot re-reads both files on the next question, or immediately on /admin bot reload.
-# docs_visibility = "public"
 # cite_sources = true
+# tiers = ["non-member", "member", "officer", "executive"]
+# [tier_roles]
+# member = ["Members"]
+# officer = ["Officers", "123456789012345678"]
+# [channel_tiers]
+# "officers" = "officer"
 # officer_role = "an officer"
 # officer_channel = "officers"
 # admin_roles = ["Officers", "123456789012345678"]

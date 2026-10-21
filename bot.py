@@ -43,7 +43,17 @@ from db import (
     upsert_message,
 )
 from llm import provider_from_env
-from permissions import channel_guild_id, here_keys, invocation_allowed, is_excluded, snowflake_id, visible_channel_ids
+from asklog import record_in_new_connection
+from permissions import (
+    channel_guild_id,
+    guild_channel_viewers,
+    here_keys,
+    invocation_allowed,
+    is_excluded,
+    role_tokens,
+    snowflake_id,
+    visible_channel_ids,
+)
 from qa import answer_in_new_connection
 from slashadmin import actor_is_admin, audit, register_admin_commands, require_admin
 from voice import get_runtime
@@ -101,7 +111,7 @@ def help_text(runtime, *, admin: bool = False) -> str:
         "The bot only replies when you do one of those. It does not post on its own.",
         "",
         "What it can see",
-        "It searches the knowledge files and messages in channels you can view. Channels on the blocklist are not logged and are not used.",
+        "It searches the knowledge files and messages in channels you can view, and only notes at or below your tier. Channels on the blocklist are not logged and are not used.",
         "Messages from members who opted out are not stored and are not used.",
         "If an allowlist is set, it only answers in those channels. An empty allowlist means every channel that is not blocklisted.",
         "Answers are short paraphrases. A line at the end can name the doc title or channel and the date.",
@@ -138,6 +148,7 @@ def help_text(runtime, *, admin: bool = False) -> str:
                 "/admin member forget deletes one member's stored data after you confirm.",
                 "/admin bot status shows uptime, messages, the model, the blocklist, and pending approvals.",
                 "/admin bot reload re-reads the persona and settings. /admin bot set-status changes the presence text.",
+                "/admin tier set-channel, set-role, and show map channels and roles onto the tier list.",
                 "When admin_roles lists role names or role ids, you also need one of those roles.",
             ]
         )
@@ -557,10 +568,18 @@ class QABot(discord.Client):
                 excluded=runtime.blocklist,
                 docs_dir=self.cfg.docs_dir,
                 llm=self.llm,
+                asker_roles=role_tokens(user),
+                channel_viewers=guild_channel_viewers(guild) if guild is not None else None,
             )
         except Exception:
             log.exception("ask failed")
             return "Something went wrong while looking that up. Try again in a minute."
+        try:
+            await asyncio.to_thread(
+                record_in_new_connection, self.cfg.db_path, question, result, asker_id=str(user.id)
+            )
+        except Exception:
+            log.exception("ask log write failed")
         log.info("ask kind=%s channel=%s", result.kind, getattr(channel, "id", None))
         return result.text or runtime.say("refusal")
 

@@ -8,10 +8,9 @@ it does not leave emails, phone numbers, street addresses, or similar patterns.
 A configurable citation line names the doc title or channel and the date, without
 a link.
 
-Knowledge files answer directly when ``docs_visibility`` is ``public`` (the
-default) or a file's front matter says ``visibility: public``. ``approval``
-holds those files for an officer. General questions rank ``facts.md`` and
-other docs above loose messages.
+Knowledge files are used when their ``tier`` is at or below the asker's tier.
+A file with no tier, or an older ``visibility: public`` line, is the lowest
+tier. General questions rank ``facts.md`` and other docs above loose messages.
 """
 from __future__ import annotations
 
@@ -58,14 +57,6 @@ def expand_terms(question: str) -> list[str]:
     return found[:12]
 
 
-def doc_is_public(hit, default_visibility: str) -> bool:
-    """Per-file front matter wins. Otherwise the ``docs_visibility`` setting."""
-    choice = str(getattr(hit, "visibility", "") or "").strip().casefold()
-    if choice not in {"public", "approval"}:
-        choice = str(default_visibility or "public").strip().casefold()
-    return choice != "approval"
-
-
 def about_self(question: str) -> bool:
     """True when the asker is asking what they themselves said or wrote."""
     text = " ".join((question or "").casefold().split())
@@ -84,7 +75,6 @@ def asks_for_private_detail(
     topics,
     hits,
     asker_id: str,
-    docs_visibility: str = "public",
 ) -> bool:
     """Hold questions about a specific person's private information.
 
@@ -112,7 +102,7 @@ def asks_for_private_detail(
             if part.casefold() in text and re.search(r"\b(say|said|email|phone|grade|address|quote)\b", text):
                 return True
     if re.search(r"\bhow much\b", text):
-        if not any(getattr(hit, "kind", "") == "doc" and doc_is_public(hit, docs_visibility) for hit in hits or []):
+        if not any(getattr(hit, "kind", "") == "doc" for hit in hits or []):
             return True
     return False
 

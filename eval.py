@@ -65,6 +65,7 @@ class Case:
     forbid_verbatim: bool = False
     fail_llm: bool = False
     replies: tuple[str, ...] = ()
+    roles: tuple[str, ...] = ()
 
 
 @dataclass
@@ -285,6 +286,44 @@ CASES = [
         forbid_verbatim=True,
         replies=("TANGERInE is the club high-altitude rocket.",),
     ),
+    Case(
+        name="member-cannot-read-officer-fact",
+        asker="ethan",
+        channels=ETHAN_CHANNELS,
+        here="general",
+        question="What is the zelkova latch code?",
+        expect="empty",
+        roles=("member",),
+        require_posted=("don't know",),
+        forbid_context=("cedar-42", "cedar"),
+        forbid_posted=("cedar", "maple", "restricted", "hidden"),
+    ),
+    Case(
+        name="officer-can-read-officer-fact",
+        asker="ethan",
+        channels=ETHAN_CHANNELS,
+        here="general",
+        question="What is the zelkova latch code?",
+        expect="answer",
+        roles=("officer",),
+        require_context=("cedar-42",),
+        require_posted=("cedar", "42"),
+        forbid_context=("maple-7",),
+        forbid_posted=("maple", "restricted", "hidden"),
+        replies=("The zelkova latch code is recorded as cedar 42.",),
+    ),
+    Case(
+        name="non-member-only-public-facts",
+        asker="ethan",
+        channels=ETHAN_CHANNELS,
+        here="general",
+        question="What is the quillon drawer mark?",
+        expect="empty",
+        roles=(),
+        require_posted=("don't know",),
+        forbid_context=("maple-7", "cedar-42"),
+        forbid_posted=("maple", "cedar", "restricted", "hidden"),
+    ),
 ]
 
 
@@ -325,20 +364,37 @@ def _problems(case: Case, result, cap_chars: int, cap_snippets: int) -> list[str
     return problems
 
 
+def _sample_tier_roles(runtime) -> dict[str, list[str]]:
+    """Role map for these cases. Each default tier name also matches a role of that name.
+
+    Mappings already on the runtime are kept. The runtime object itself is not changed.
+    """
+    roles = {tier: list(runtime.tier_roles.get(tier, [])) for tier in runtime.tiers}
+    for tier in runtime.tiers:
+        label = tier.casefold()
+        if label not in {"non-member", "member", "officer", "executive"}:
+            continue
+        current = {item.casefold() for item in roles[tier]}
+        if label not in current:
+            roles[tier] = roles[tier] + [tier]
+    return roles
+
+
 def run_cases(conn=None) -> list[CaseResult]:
     runtime = get_runtime()
     runtime.reload_if_changed()
+    sample_roles = _sample_tier_roles(runtime)
     own_conn = conn is None
-    if conn is None:
-        if not SAMPLE_DB.is_file():
-            raise SystemExit("Missing sample/sample.db. Run: python sample/build_sample.py")
-        temp_dir = tempfile.mkdtemp(prefix="qa-eval-")
-        db_path = Path(temp_dir) / "eval.db"
-        shutil.copy(SAMPLE_DB, db_path)
-        conn = connect(db_path)
-    llm = ExtractiveProvider()
     results: list[CaseResult] = []
     try:
+        if conn is None:
+            if not SAMPLE_DB.is_file():
+                raise SystemExit("Missing sample/sample.db. Run: python sample/build_sample.py")
+            temp_dir = tempfile.mkdtemp(prefix="qa-eval-")
+            db_path = Path(temp_dir) / "eval.db"
+            shutil.copy(SAMPLE_DB, db_path)
+            conn = connect(db_path)
+        llm = ExtractiveProvider()
         for case in CASES:
             if case.fail_llm:
                 model = _FailingLLM()
@@ -357,6 +413,8 @@ def run_cases(conn=None) -> list[CaseResult]:
                 llm=model,
                 dry_run=False,
                 apply_sample_blocklist=True,
+                roles=list(case.roles),
+                tier_roles=sample_roles,
             )
             problems = _problems(case, result, runtime.max_answer_chars, runtime.max_context_snippets)
             detail = f"{result.kind} snippets={len(result.snippets)} len={len(result.text)}"
@@ -373,7 +431,7 @@ def run_cases(conn=None) -> list[CaseResult]:
             )
         )
     finally:
-        if own_conn:
+        if own_conn and conn is not None:
             conn.close()
     return results
 

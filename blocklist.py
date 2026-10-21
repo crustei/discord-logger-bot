@@ -336,6 +336,74 @@ def toml_array(items) -> str:
     return "[" + ", ".join(json.dumps(str(item)) for item in items) + "]"
 
 
+def toml_key(key: str) -> str:
+    text = str(key)
+    if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", text):
+        return text
+    return json.dumps(text)
+
+
+def render_mapping_section(header: str, mapping: dict, *, arrays: bool) -> str:
+    """One toml table. Empty lists are omitted. An empty table returns ''."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", header):
+        raise BlocklistError("invalid settings table")
+    lines = [f"[{header}]"]
+    wrote = False
+    for key, value in mapping.items():
+        if arrays:
+            items = [str(item) for item in (value or []) if str(item).strip()]
+            if not items:
+                continue
+            rendered = toml_array(items)
+        else:
+            rendered = json.dumps(str(value))
+        wrote = True
+        lines.append(f"{toml_key(str(key))} = {rendered}")
+    if not wrote:
+        return ""
+    return "\n".join(lines)
+
+
+def replace_table_section(text: str, header: str, body: str) -> str:
+    """Replace ``[header]`` through the next table, or append ``body``."""
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", header):
+        raise BlocklistError("invalid settings table")
+    pattern = re.compile(rf"(?m)^\[{re.escape(header)}\][ \t]*$")
+    match = pattern.search(text)
+    if match is None:
+        if not body:
+            return text
+        if text and not text.endswith("\n"):
+            text += "\n"
+        if text and not text.endswith("\n\n"):
+            text += "\n"
+        return text + body + "\n"
+    rest = text[match.end() :]
+    next_header = re.search(r"(?m)^\[", rest)
+    end = match.end() + (next_header.start() if next_header else len(rest))
+    if body:
+        replacement = body + "\n"
+        tail = text[end:]
+        if tail.startswith("\n"):
+            tail = tail[1:]
+        if tail and not replacement.endswith("\n\n"):
+            replacement += "\n"
+        return text[: match.start()] + replacement + tail
+    head = text[: match.start()]
+    merged = head + text[end:]
+    return re.sub(r"\n{3,}", "\n\n", merged)
+
+
+def write_local_table(path: Path, header: str, mapping: dict, *, arrays: bool) -> None:
+    """Replace one table in the local settings file and keep every other line."""
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    body = render_mapping_section(header, mapping, arrays=arrays)
+    updated = replace_table_section(text, header, body)
+    if updated and not updated.endswith("\n"):
+        updated += "\n"
+    _atomic_write(path, updated)
+
+
 def _toml_value(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -431,6 +499,14 @@ def dump_settings(data: dict) -> str:
     if section:
         lines.append("")
         lines.append(section)
+    for key, arrays in (("tier_roles", True), ("channel_tiers", False)):
+        emitted.add(key)
+        value = data.get(key)
+        if isinstance(value, dict):
+            table = render_mapping_section(key, value, arrays=arrays)
+            if table:
+                lines.append("")
+                lines.append(table)
     for key in sorted(data):
         if key in emitted:
             continue

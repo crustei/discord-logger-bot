@@ -2,20 +2,20 @@
 
 Channels on the blocklist in config/settings.toml are skipped, then purged.
 An empty blocklist skips nothing. Usage: python backfill.py [paths or dirs ...]
-With no paths, reads EXPORTS_DIR if set, otherwise ./exports (relative to the
-working directory).
+With no arguments, JSON files are read from ./exports. Set EXPORTS_DIR to use
+another directory.
 """
 import glob, json, os, sys
 from db import connect, purge_excluded, upsert_message
 DEFAULT = ["./exports"]
-def roots(args):
-    if args:
-        return args
-    chosen = os.environ.get("EXPORTS_DIR", "").strip()
-    return [chosen] if chosen else list(DEFAULT)
+
+def export_roots():
+    raw = os.environ.get("EXPORTS_DIR", "").strip()
+    return [raw] if raw else list(DEFAULT)
+
 def files(args):
     out = []
-    for a in roots(args):
+    for a in args or export_roots():
         for p in glob.glob(a):
             out += sorted(glob.glob(os.path.join(p, "*.json"))) if os.path.isdir(p) else [p]
     return out
