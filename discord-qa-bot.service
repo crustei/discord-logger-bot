@@ -1,0 +1,15 @@
+# User service. Edit the three paths if the checkout is not in your home directory.
+# Install: cp discord-qa-bot.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now discord-qa-bot
+[Unit]
+Description=Discord logger and Q&A bot
+After=network-online.target
+
+[Service]
+WorkingDirectory=%h/discord-qa-bot
+EnvironmentFile=%h/discord-qa-bot/.env
+ExecStart=%h/discord-qa-bot/.venv/bin/python bot.py
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=default.target

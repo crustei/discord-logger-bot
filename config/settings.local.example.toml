@@ -1,0 +1,24 @@
+# Copy this file to config/settings.local.toml and edit it there.
+# settings.local.toml is gitignored. Keys here replace the same keys in
+# config/settings.toml. blocklist.guilds entries are merged by guild id.
+# The bot re-reads both files on the next question, or immediately on /admin bot reload.
+# docs_visibility = "public"
+# cite_sources = true
+# officer_role = "an officer"
+# officer_channel = "officers"
+# admin_roles = ["Officers", "123456789012345678"]
+# python admin.py blocklist add|remove|list edits settings.local.toml.
+# python admin.py optout add|remove|list stores user ids in the local database.
+# Set optout_command = false here to turn off the /optout slash command.
+# status_text = "Always listening... | /help"
+# terms_url = "https://example.test/terms"
+# privacy_url = "https://example.test/privacy"
+
+display_title = "My Org"
+org_name = "My Org"
+
+# Names or numeric channel ids. Empty excludes nothing.
+excluded_channels = ["private-channel"]
+
+# [blocklist.guilds]
+# "123456789012345678" = ["private-channel", "998877665544332211"]

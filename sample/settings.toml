@@ -1,0 +1,6 @@
+# Fixture for the offline demo and eval only. The live bot does not read this file.
+# The fictional log plants #private-channel. Listing it here keeps those rows
+# out of demo and eval answers. Put a real server's blocklist in
+# config/settings.local.toml instead.
+
+excluded_channels = ["private-channel"]
