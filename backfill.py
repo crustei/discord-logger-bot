@@ -2,13 +2,20 @@
 
 Channels on the blocklist in config/settings.toml are skipped, then purged.
 An empty blocklist skips nothing. Usage: python backfill.py [paths or dirs ...]
-(default: known export locations)"""
+With no paths, reads EXPORTS_DIR if set, otherwise ./exports (relative to the
+working directory).
+"""
 import glob, json, os, sys
 from db import connect, purge_excluded, upsert_message
-DEFAULT = ["/cursor/stores/store-3d5ea2e7-2610-40af-bffd-c0a1c06d7b4c/grok-bot/agents/*/attachments", "/workspace/discord_exports"]
+DEFAULT = ["./exports"]
+def roots(args):
+    if args:
+        return args
+    chosen = os.environ.get("EXPORTS_DIR", "").strip()
+    return [chosen] if chosen else list(DEFAULT)
 def files(args):
     out = []
-    for a in args or DEFAULT:
+    for a in roots(args):
         for p in glob.glob(a):
             out += sorted(glob.glob(os.path.join(p, "*.json"))) if os.path.isdir(p) else [p]
     return out

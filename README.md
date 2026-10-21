@@ -199,6 +199,7 @@ Other environment variables, all optional:
 | --- | --- | --- |
 | `BOT_DB` | `bot.db` | Live SQLite file |
 | `DOCS_DIR` | `docs` | Notes folder |
+| `EXPORTS_DIR` | `./exports` | DiscordChatExporter JSON directory for `backfill.py` when no paths are passed |
 | `SNAPSHOT_HOURS` | `6` | How often to snapshot members and roles |
 | `GUILD_IDS` | empty | Comma-separated guilds to watch and to receive slash commands. `GUILD_ID` is a single-id alias when `GUILD_IDS` is unset |
 
@@ -206,9 +207,10 @@ The database file is `bot.db` unless `BOT_DB` points somewhere else.
 
 Channel lists, the character cap, the display title, and the org name live in `config/settings.toml` and `config/settings.local.toml`, not in the environment.
 
-Import old history from DiscordChatExporter JSON (blocklisted channels are skipped, then purged):
+Import old history from DiscordChatExporter JSON (blocklisted channels are skipped, then purged). With no paths, `backfill.py` reads `./exports`, or the directory in `EXPORTS_DIR`:
 
 ```bash
+.venv/bin/python backfill.py
 .venv/bin/python backfill.py path/to/exports
 ```
 
