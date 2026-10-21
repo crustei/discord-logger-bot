@@ -1,0 +1,78 @@
+# Limits, branding, and channel rules. Edit, save, then ask again or run /admin bot reload.
+# excluded_channels is the blocklist: names or numeric channel ids.
+# An empty list excludes nothing. Nothing is excluded in code beyond this file.
+#
+# Deployment-specific values belong in config/settings.local.toml (gitignored).
+# Copy config/settings.local.example.toml to start. Keys there replace these.
+
+# Shown on digests and in the startup log.
+display_title = "Discord bot"
+
+# Used in slash-command text and in the {org_name} persona placeholder.
+org_name = "My Org"
+
+# Custom status under the bot's name. Shown as written, up to 128 characters.
+status_text = "Always listening... | /help"
+
+# Public pages linked from /help. Leave blank to omit that link.
+terms_url = ""
+privacy_url = ""
+
+# Posted answers, including the "held for approval" note, stay under this many characters.
+max_answer_chars = 600
+
+# How many snippets the model is allowed to see for one question (1 to 12).
+max_context_snippets = 12
+
+# Never log, search, or quote these channels. Names or numeric channel ids.
+# Applies to every server. An empty list excludes nothing.
+excluded_channels = []
+
+# Channels where /ask and @mentions get an answer. Names or ids.
+# An empty list means every channel that is not on the blocklist.
+allowed_channels = []
+
+# Members can run /optout on themselves. Set false to turn that command off.
+# The list of opted-out user ids is stored in the local database, not here.
+optout_command = true
+
+# Role names or role ids that may use /admin, along with Manage Server.
+# An empty list means Manage Server is enough. Override this in settings.local.toml.
+admin_roles = []
+
+# public: knowledge files answer members directly.
+# approval: every knowledge file waits for an officer, unless a file says visibility: public.
+docs_visibility = "public"
+
+# Append "Based on: <title or #channel>, <date>" to answers.
+cite_sources = true
+
+# Used when the bot does not know. officer_channel is a name, not a link.
+officer_role = "an officer"
+officer_channel = ""
+
+# Questions that mention these topics wait for an officer.
+sensitive_topics = [
+  "grade",
+  "grades",
+  "gpa",
+  "interview",
+  "applicant",
+  "email",
+  "phone",
+  "salary",
+  "password",
+  "pin",
+  "social security",
+  "home address",
+]
+
+# Channels treated as visible to every member (still minus the blocklist).
+# Names or ids. Leave empty unless you want a channel quoted even when the
+# member cache can't see it.
+public_channels = []
+
+# Optional per-server blocklist. Keys are guild ids. Values are names or channel ids.
+# python admin.py blocklist add --guild GUILD_ID private-channel
+# [blocklist.guilds]
+# "123456789012345678" = ["private-channel", "998877665544332211"]

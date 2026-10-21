@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+.env
+*.db
+bot.db
+bot.db-*
+config/settings.local.toml
+sample/demo-session.db
+sample/*.db-wal
+sample/*.db-shm
+bot.log
+bot.pid
+
+# Local knowledge pack, digests, and backups (private, per deployment)
+knowledge/
+digests/
+backups/
+*.bak*
+super.pid
