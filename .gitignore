@@ -13,9 +13,10 @@ sample/*.db-shm
 bot.log
 bot.pid
 
-# Local knowledge pack, digests, and backups (private, per deployment)
+# Local knowledge pack, digests, exports, and backups (private, per deployment)
 knowledge/
 digests/
+exports/
 backups/
 *.bak*
 super.pid
