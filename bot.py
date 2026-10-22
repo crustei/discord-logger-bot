@@ -44,6 +44,7 @@ from db import (
 )
 from llm import provider_from_env
 from asklog import record_in_new_connection
+from catchup import run_catchup
 from permissions import (
     channel_guild_id,
     guild_channel_viewers,
@@ -178,6 +179,8 @@ class QABot(discord.Client):
         self._pending_previous_scope = None
         self._pending_previous_guilds = ()
         self._db_lock = threading.Lock()
+        self._catchup_lock = asyncio.Lock()
+        self._catchup_task = None
         self._purge_if_needed()
         self.llm = provider_from_env()
         self._register_commands()
@@ -358,6 +361,26 @@ class QABot(discord.Client):
             runtime.max_answer_chars,
             self.llm.name,
         )
+        self._start_catchup()
+
+    async def on_resumed(self) -> None:
+        self._start_catchup()
+
+    def _start_catchup(self) -> None:
+        if self._catchup_task is not None and not self._catchup_task.done():
+            return
+        self._catchup_task = asyncio.create_task(self._catchup())
+
+    async def _catchup(self) -> None:
+        if self._catchup_lock.locked():
+            return
+        async with self._catchup_lock:
+            try:
+                await asyncio.to_thread(self._purge_if_needed)
+                await run_catchup(self, self.cfg.db_path, msg_row, get_runtime().blocklist,
+                                  watching=self._watching)
+            except Exception:
+                log.exception("catch-up failed")
 
     async def snapshot_loop(self) -> None:
         await self.wait_until_ready()
