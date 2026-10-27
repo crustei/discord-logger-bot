@@ -1,0 +1,59 @@
+classDiagram
+  class QABot {
+    <<discord.Client · bot.py>>
+    cfg: Config
+    on_message() / slash /ask, /optout, /help
+    catch-up on start
+    member snapshots (snapshot_hours)
+  }
+  class Config { <<config.py>> load_config() excluded_channels() configured_guild_ids() }
+  class RuntimeConfig { <<voice.py>> persona, visibility, limits }
+  class Diagnostics {
+    <<diag.py>>
+    run(level light|full)
+    run_safe(timeout)
+    loop(every=600, wall=time.time)
+    write(status.json)
+    status_age()
+  }
+  class GatewayWatchdog { <<watchdog.py>> stale-status / freeze watchdog }
+  class counters { <<counters.py>> load() bump(name) on_start() → diag/counters.json }
+  class qa { <<qa.py>> handle_question() compose_answer() is_grounded() Result }
+  class retrieve { <<retrieve.py>> retrieve() expanded_question() rerank() search_docs() search_messages() refresh_docs() Hit }
+  class answerstyle { <<answerstyle.py>> expand_terms() present_answer() citation_line() redact_pii() }
+  class llm { <<llm.py>> Gemini client: expand_query() rerank() answer() }
+  class tiers { <<tiers.py>> member_tier() searchable_bases() allows() }
+  class permissions { <<permissions.py>> invocation_allowed() visible_channel_ids() }
+  class Blocklist { <<blocklist.py>> excluded channels; add/remove_channel() }
+  class db { <<db.py>> connect() upsert_message() opt-outs approvals delete_user_data() }
+  class asklog { <<asklog.py>> record() → ask_log }
+  class catchup { <<catchup.py>> run_catchup() }
+  class slashadmin { <<slashadmin.py>> register_admin_commands(): blocklist, approvals, optout, member forget, bot status/reload/set-status }
+  class admin { <<admin.py>> approve_request() deny_request() }
+  class commandsync { <<commandsync.py>> SyncPlan }
+  QABot --> Config
+  QABot --> RuntimeConfig
+  QABot *-- Diagnostics
+  QABot *-- GatewayWatchdog
+  QABot --> qa
+  QABot --> catchup
+  QABot --> slashadmin
+  QABot --> commandsync
+  QABot --> db
+  Diagnostics --> counters
+  GatewayWatchdog --> counters
+  Diagnostics ..> qa : pipeline check (stub LLM)
+  qa --> retrieve
+  qa --> answerstyle
+  qa --> llm
+  qa --> tiers
+  qa --> permissions
+  qa --> asklog
+  retrieve --> db
+  retrieve --> tiers
+  catchup --> Blocklist
+  catchup --> db
+  slashadmin --> admin
+  slashadmin --> Blocklist
+  slashadmin --> db
+  admin --> db

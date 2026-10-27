@@ -17,17 +17,27 @@ CREATE TABLE IF NOT EXISTS ask_log(
   ts TEXT NOT NULL,
   question TEXT NOT NULL,
   answer TEXT NOT NULL,
-  decision TEXT NOT NULL CHECK(decision IN ('answered','dont_know','pending')),
+  decision TEXT NOT NULL CHECK(decision IN ('answered','dont_know','pending','error')),
   confidence REAL NOT NULL,
   sources TEXT NOT NULL DEFAULT '[]');
 CREATE INDEX IF NOT EXISTS ask_log_ts ON ask_log(ts);
 """
 
-DECISIONS = {"answer": "answered", "pending": "pending", "empty": "dont_know"}
+DECISIONS = {"answer": "answered", "pending": "pending", "empty": "dont_know", "error": "error"}
 
 
 def ensure_table(conn) -> None:
     conn.executescript(SCHEMA)
+    row = conn.execute("SELECT sql FROM sqlite_master WHERE name='ask_log'").fetchone()
+    if row and "'error'" not in (row[0] or ""):
+        # Older table: widen the decision check to allow 'error'; keep every row.
+        conn.executescript(
+            "ALTER TABLE ask_log RENAME TO ask_log_old; DROP INDEX IF EXISTS ask_log_ts;"
+            + SCHEMA
+            + "INSERT INTO ask_log(id, ts, question, answer, decision, confidence, sources)"
+            " SELECT id, ts, question, answer, decision, confidence, sources FROM ask_log_old;"
+            "DROP TABLE ask_log_old;"
+        )
 
 
 def _source(hit) -> dict:
@@ -51,6 +61,8 @@ def confidence_for(result) -> float:
     """0-1. Mixes the best retrieval score, how many distinct sources agree, and the decision."""
     decision = DECISIONS.get(result.kind, "dont_know")
     hits = list(result.snippets or [])
+    if decision == "error":
+        return 0.0
     if decision == "dont_know" or not hits:
         return 0.0 if not hits else 0.1
     scores = [max(0.0, float(getattr(h, "score", 0.0) or 0.0)) for h in hits]

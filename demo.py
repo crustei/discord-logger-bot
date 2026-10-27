@@ -21,6 +21,7 @@ out of answers. --db does not add that fixture list.
 """
 from __future__ import annotations
 
+import os
 import argparse
 import shutil
 import sys
@@ -31,10 +32,10 @@ from db import connect
 from llm import ExtractiveProvider, provider_from_env
 from permissions import norm_name
 from qa import Result, handle_question
-from voice import get_runtime
 from asklog import record
 
 LOG_QUESTIONS = False  # set by --log
+from voice import get_runtime
 
 ROOT = Path(__file__).resolve().parent
 SAMPLE_DB = ROOT / "sample" / "sample.db"
@@ -134,8 +135,6 @@ def ask(
     llm,
     dry_run: bool,
     apply_sample_blocklist: bool = False,
-    roles: list[str] | None = None,
-    tier_roles=None,
 ) -> Result:
     asker_id, asker_name = resolve_asker(conn, asker)
     visible, resolved = channel_keys(conn, channels)
@@ -154,6 +153,7 @@ def ask(
         question,
         asker_id=asker_id,
         asker_name=asker_name,
+        asker_tier=os.environ.get("DEMO_TIER", "non-member"),
         channel_id=channel_id,
         channel_name=channel_name,
         visible=visible | here_keys,
@@ -164,8 +164,6 @@ def ask(
         llm=llm,
         dry_run=dry_run,
         runtime=runtime,
-        asker_roles=list(roles or []),
-        tier_roles=tier_roles,
     )
     if LOG_QUESTIONS:
         record(conn, question, result, asker_id=asker_id)

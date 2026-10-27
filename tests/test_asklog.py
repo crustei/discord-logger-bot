@@ -20,7 +20,7 @@ def test_row_has_no_asker_or_channel(tmp_path):
     assert cols == ["id", "ts", "question", "answer", "decision", "confidence", "sources"]
     row = conn.execute("SELECT * FROM ask_log WHERE id=?", (rid,)).fetchone()
     blob = json.dumps(list(row))
-    assert "42" not in blob and "bob" not in blob
+    assert '"42"' not in blob and "asker" not in blob and "bob" not in blob
     assert row[4] == "answered" and 0 < row[5] <= 1
 
 

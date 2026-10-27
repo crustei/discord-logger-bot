@@ -1,0 +1,33 @@
+sequenceDiagram
+  actor U as Discord user
+  participant B as QABot (bot.py)
+  participant P as permissions / tiers
+  participant Q as qa.handle_question
+  participant R as retrieve
+  participant G as Gemini (llm.py)
+  participant D as bot.db
+  participant S as answerstyle
+  U->>B: /ask question (or @mention)
+  B->>P: invocation_allowed(channel), member_tier(roles)
+  P-->>B: tier non-member | member | officer
+  B->>Q: handle_question(question, asker, scope)
+  Q->>R: retrieve(question, scope, llm)
+  R->>S: expand_terms() local synonyms
+  R->>G: (1) expand_query
+  alt Gemini fails / 429
+    R-->>R: local synonyms only
+  end
+  R->>D: FTS search docs (allowed tier bases) + messages (visible channels, minus blocklist/opt-outs)
+  D-->>R: hits
+  Q->>R: rerank(hits)
+  R->>G: (2) rerank / pick entries
+  Q->>G: (3) answer(prompt, context)
+  Q->>Q: is_grounded() local self-check (no model call)
+  alt grounded
+    Q->>S: present_answer() + citation_line()
+  else gap / above-tier
+    Q-->>Q: unknown reply or approval request (db.create_approval)
+  end
+  Q->>D: asklog.record(ask_log)
+  Q-->>B: Result
+  B-->>U: reply (mentions neutralized)

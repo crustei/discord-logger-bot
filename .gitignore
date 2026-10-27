@@ -3,7 +3,6 @@ __pycache__/
 .pytest_cache/
 *.pyc
 .env
-*.db
 bot.db
 bot.db-*
 config/settings.local.toml
@@ -13,10 +12,44 @@ sample/*.db-shm
 bot.log
 bot.pid
 
-# Local knowledge pack, digests, exports, and backups (private, per deployment)
+# Private knowledge pack
 knowledge/
-digests/
-exports/
-backups/
-*.bak*
+.env.*
+!.env.example
 super.pid
+*.bak-*
+
+# Generated knowledge bases, indexes, embedding cache, and raw extractions (private)
+data/
+tools_local/kb/raw/
+tools_local/kb/raw_qa/
+tools_local/kb/stats.json
+tools_local/kb/raw_local/
+diag/
+logs/
+bot.lock
+STANDBY
+deploy/gcp/project
+MIGRATED
+vm_mirror/
+
+# Never commit private or generated data
+*.db
+*.db-*
+*.sqlite*
+*.log
+*.bak*
+*.env*
+!.env.example
+digests/
+diag/
+data/
+knowledge/
+vm_mirror/
+backups/
+ask_log*
+config/source_links.json
+config/settings.local.toml
+tools_local/kb/
+tools_local/*.json
+tools_local/api_pull.py

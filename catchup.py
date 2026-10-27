@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 
 import discord
@@ -18,7 +19,8 @@ from permissions import is_excluded
 
 log = logging.getLogger("catchup")
 
-ALWAYS_SKIP: frozenset[str] = frozenset()  # extra channel names to never fetch; the blocklist is applied too
+# Channel names catch-up never reads, comma-separated in CATCHUP_SKIP_CHANNELS.
+ALWAYS_SKIP = frozenset(n.strip() for n in os.environ.get("CATCHUP_SKIP_CHANNELS", "").split(",") if n.strip())
 PER_CHANNEL_LIMIT = 500
 RUN_LIMIT = 5000
 

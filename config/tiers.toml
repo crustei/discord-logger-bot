@@ -1,0 +1,9 @@
+# Optional role-name SEED for access tiers (public < member < officer < admin).
+# Admin = Discord Administrator permission, no config. On first start in a server the bot
+# copies these names into data/role_tiers.json by role id; after that, admins manage roles
+# with /admin roles show|set|remove and this file is only used for unconfigured servers.
+# Only "officer" and "member" are read; anyone else is public. Replace with your server's roles.
+[roles]
+officer = ["President", "Vice President", "Officer", "Team Lead"]
+member = ["Member", "Alumni"]
+non-member = ["Guest"]

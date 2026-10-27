@@ -1,4 +1,6 @@
 import shutil
+import os
+os.environ.setdefault("LLM_BACKOFF_SCALE", "0")
 from pathlib import Path
 
 import pytest
@@ -57,6 +59,9 @@ def db(tmp_path):
 
 @pytest.fixture
 def sample_db(tmp_path):
+    if not SAMPLE_DB.exists():
+        import subprocess, sys
+        subprocess.run([sys.executable, str(ROOT / "sample" / "build_sample.py")], check=True)
     dest = tmp_path / "sample.db"
     shutil.copy(SAMPLE_DB, dest)
     conn = connect(dest)
@@ -85,3 +90,41 @@ def add(conn, **overrides):
     assert upsert_message(conn, row) is True
     conn.commit()
     return row
+
+
+@pytest.fixture(autouse=True)
+def legacy_message_answers(request, monkeypatch):
+    """Tests marked ``messages`` exercise the opt-in answer_from = "knowledge_and_messages" path."""
+    if request.node.get_closest_marker("messages") is not None:
+        original = voice.RuntimeConfig.__init__
+
+        def init(self, *args, **kwargs):
+            original(self, *args, **kwargs)
+            self.answer_from = "knowledge_and_messages"
+
+        monkeypatch.setattr(voice.RuntimeConfig, "__init__", init)
+    yield
+
+
+def pytest_configure(config):
+    config.addinivalue_line("markers", "messages: raw-message answers turned on (legacy opt-in mode)")
+
+
+import pytest as _pytest
+
+
+@_pytest.fixture(autouse=True)
+def _isolate_counters(tmp_path, monkeypatch):
+    """Tests must never touch the live diag/counters.json (they once logged fake bot restarts)."""
+    import counters
+    monkeypatch.setattr(counters, "PATH", tmp_path / "counters.json")
+    monkeypatch.setattr(counters.bump, "__defaults__", ("", tmp_path / "counters.json", False))
+    monkeypatch.setattr(counters.on_start, "__defaults__", (tmp_path / "counters.json", None))
+
+
+@pytest.fixture(autouse=True)
+def _isolated_role_store(tmp_path, monkeypatch):
+    """Never read or write the real data/role_tiers.json in tests."""
+    import tiers
+    monkeypatch.setattr(tiers, "ROLE_FILE", tmp_path / "role_tiers.json")
+    tiers._store_cache.update(key=None, data={})

@@ -1,3 +1,4 @@
+import pytest
 import asyncio
 import json
 
@@ -168,6 +169,7 @@ def test_search_skips_opted_out_authors_even_if_a_row_remains(db):
     assert own == []
 
 
+@pytest.mark.messages
 def test_opted_out_member_can_ask_without_their_old_messages(db, tmp_path):
     from voice import get_runtime
 

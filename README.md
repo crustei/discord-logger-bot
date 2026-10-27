@@ -69,10 +69,8 @@ Non-coders change how the bot talks, what it is called, and which channels it ig
 | `status_text` | `Always listening... \| /help` | Custom status under the bot's name, up to 128 characters |
 | `terms_url` | empty | Public Terms page linked from `/help` |
 | `privacy_url` | empty | Public Privacy page linked from `/help` |
-| `admin_roles` | empty | Role names or role ids required for `/admin`, in addition to Manage Server. Empty means Manage Server is enough |
-| `tiers` | `non-member`, `member`, `officer`, `executive` | Access levels, lowest first. A person's tier is the highest tier among their roles |
-| `tier_roles` | empty | Role names or role ids for each tier. Set this server's roles in `settings.local.toml` |
-| `channel_tiers` | empty | Channel name or id to a tier. A channel with no entry takes the lowest tier among roles that can view it |
+| `admin_roles` | empty | Deprecated and ignored. `/admin` requires the Discord Administrator permission |
+| `docs_visibility` | `public` | `public` answers from knowledge files directly. `approval` holds every file unless that file says `visibility: public` |
 | `cite_sources` | true | Append `Based on: <title or #channel>, <date>`. No links |
 | `officer_role` | `an officer` | Who to ask when the bot does not know |
 | `officer_channel` | empty | Channel name in that sentence, without a link |
@@ -131,15 +129,15 @@ A file may start with a short front matter block:
 title: Recruitment
 source: Officer notes
 modified: 2026-10-21
-tier: non-member
+visibility: public
 ---
 
 Recruitment applications open on 1 November 2026. As of 2026-10-21.
 ```
 
-`title` is the name shown in `Based on:`. `source` is a note for the operator. `modified` is a `YYYY-MM-DD` date. If it is missing, the newest `As of YYYY-MM-DD` line in the file is used. `tier` is one of the names in `tiers`. It limits who can hear that file. With no `tier` line, the file is the lowest tier. An older `visibility: public` line means that same lowest tier. `visibility: approval` is read as `officer` when that tier exists, and otherwise as the highest tier.
+`title` is the name shown in `Based on:`. `source` is a note for the operator. `modified` is a `YYYY-MM-DD` date. If it is missing, the newest `As of YYYY-MM-DD` line in the file is used. `visibility` is `public` or `approval`. It overrides `docs_visibility` for that file only.
 
-`/ask` uses a file only when its tier is at or below the asker's tier, and a message only when that is true for its channel and the asker can view the channel. The citation names the title and the date. It does not include a path or a link.
+`docs_visibility = "public"` (the default) answers from these files directly. `approval` holds every file that does not say `visibility: public`. The citation names the title and the date. It does not include a path or a link.
 
 A model reply keeps the words it wrote. If it copies a long stretch of a snippet, the bot asks the model once to rephrase, and uses the don't-know line when that second reply still copies. Words are not cut out of the model text to hide a quote. With no model, matching notes are paraphrased locally, and a raw snippet is not posted when nothing relevant matched. Source labels such as a title stuck to the front of a line are removed from the answer body. Emails, phone numbers, street addresses, and similar patterns are replaced with `[redacted]`. If nothing relevant matches, or the model request fails, the reply says it does not know and names `officer_role` and, when set, `#officer_channel`.
 
@@ -203,19 +201,12 @@ Other environment variables, all optional:
 | `DOCS_DIR` | `docs` | Notes folder |
 | `SNAPSHOT_HOURS` | `6` | How often to snapshot members and roles |
 | `GUILD_IDS` | empty | Comma-separated guilds to watch and to receive slash commands. `GUILD_ID` is a single-id alias when `GUILD_IDS` is unset |
-| `EXPORTS_DIR` | `./exports` | DiscordChatExporter folder used by `backfill.py` when no path is passed |
 
 The database file is `bot.db` unless `BOT_DB` points somewhere else.
 
 Channel lists, the character cap, the display title, and the org name live in `config/settings.toml` and `config/settings.local.toml`, not in the environment.
 
-Import old history from DiscordChatExporter JSON (blocklisted channels are skipped, then purged). With no path, this reads `./exports`, or `EXPORTS_DIR` when that is set. Export with a **bot** token only. Running an exporter with a personal user token is self-botting under Discord's Terms and can get that account suspended.
-
-```bash
-.venv/bin/python backfill.py
-```
-
-Or pass a path:
+Import old history from DiscordChatExporter JSON (blocklisted channels are skipped, then purged):
 
 ```bash
 .venv/bin/python backfill.py path/to/exports
@@ -243,10 +234,6 @@ What gets posted:
 - No match, or a match only in a blocklisted or invisible channel: the refusal from `config/persona.md`.
 
 Notes belong in `docs/` as `.md`, `.markdown`, or `.txt`. `README.md` is skipped. Docs are visible to anyone who can ask, once an officer approves, so keep private notes out of that folder. Files over 200KB are skipped.
-
-## Query log
-
-Every `/ask` or mention is written to an anonymous `ask_log` table in the bot database (see `asklog.py`): the question, the answer, the sources used, a confidence score, and the time. It never records who asked or the channel, and it skips users who opted out. The write runs off the event loop and a failure there never blocks an answer. Use it to find unanswered or low-confidence questions and improve your knowledge files. `python demo.py --log --db <copy of bot.db>` logs demo questions the same way.
 
 ## Approval queue
 
@@ -277,7 +264,9 @@ A member's Discord user id can be opted out. The bot then skips their messages, 
 
 ## Admin commands in Discord
 
-`/admin` is a command group. Discord shows it to members with Manage Server. The bot checks that permission again, and when `admin_roles` lists role names or role ids the member needs one of those roles too. Every reply is ephemeral.
+`/admin` is a command group. Discord shows it only to server Administrators, and the bot checks the Administrator permission again on every use. Every reply is ephemeral.
+
+Access tiers are public < member < officer < admin. Administrators are always admin. `/admin roles show` lists the mapping, `/admin roles set tier:<officer|member> role:<@role>` maps a role, and `/admin roles remove role:<@role>` unmaps it. Mappings are stored by role id in `data/role_tiers.json`; on first start they are seeded from the role names in `config/tiers.toml`. Officer answer verification accepts officers and admins, read live from each interaction.
 
 | Command | What it does |
 | --- | --- |
@@ -294,9 +283,6 @@ A member's Discord user id can be opted out. The bot then skips their messages, 
 | `/admin bot status` | Uptime, messages stored, last message, model, blocklist size, pending approvals |
 | `/admin bot reload` | Re-read persona and settings, then refresh presence |
 | `/admin bot set-status` | Save `status_text` in the local file and update presence |
-| `/admin tier set-channel` | Map a channel to a tier in `settings.local.toml` |
-| `/admin tier set-role` | Map a role to a tier in `settings.local.toml` |
-| `/admin tier show` | Effective tier list, role map, and channel map |
 
 A channel picked in the menu is stored by id on the global blocklist. A typed name is stored for that server. There is no top-level `/reload`.
 
@@ -360,5 +346,5 @@ The systemd example is `discord-qa-bot.service`. Edit the paths in that file to 
 - Voice and the hold/refusal wording: `config/persona.md`.
 - Title, org name, caps, and channel lists: `config/settings.toml` for shared defaults, `config/settings.local.toml` for this deployment, or `admin.py blocklist` for the blocklist.
 - How many FTS hits are considered before the snippet cap, and how long each snippet is: `CANDIDATE_LIMIT`, `SNIPPET_CHARS`, and `CONTEXT_CHAR_BUDGET` in `retrieve.py`.
-- What may be posted without an officer: `split_for_answer` in `qa.py`, `tiers`, and `sensitive_topics`.
+- What may be posted without an officer: `split_for_answer` in `qa.py`, `docs_visibility`, and `sensitive_topics`.
 - Another model server: set `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL`. A new provider subclasses `LLMProvider` in `llm.py` and is added to `PROVIDERS`.

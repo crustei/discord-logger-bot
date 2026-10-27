@@ -15,7 +15,9 @@ If any of the three is missing, the bot paraphrases matching notes locally inste
 from __future__ import annotations
 
 import json
+import logging
 import os
+import time
 import urllib.error
 import urllib.request
 
@@ -31,6 +33,21 @@ class LLMError(RuntimeError):
     """The provider failed. Callers reply that they do not know."""
 
 
+log = logging.getLogger("llm")
+FALLBACK_TAG = "-# answered without AI (backup mode)"
+EXHAUSTED_SECONDS = 15 * 60
+_state = {"exhausted_until": 0.0}
+
+
+def primary_exhausted() -> bool:
+    """True for 15 minutes after a 429, so the answer path skips the model instead of wasting calls."""
+    return time.monotonic() < _state["exhausted_until"]
+
+
+def mark_exhausted() -> None:
+    _state["exhausted_until"] = time.monotonic() + EXHAUSTED_SECONDS
+
+
 class LLMProvider:
     """Student hook: implement ``answer(question, context_block) -> str``."""
 
@@ -41,6 +58,10 @@ class LLMProvider:
 
     def expand_query(self, question: str) -> str:
         """Optional search keywords. The default adds none."""
+        return ""
+
+    def rerank(self, question: str, listing: str) -> str:
+        """Optional: ids of the best entries, best first. The default keeps keyword order."""
         return ""
 
 
@@ -83,12 +104,57 @@ class OpenAICompatibleProvider(LLMProvider):
                 "List up to six search keywords for the question. Spaces only. No sentences.",
                 (question or "")[:300],
             )
-        except LLMError:
+        except Exception:
             return ""
         words = re.findall(r"[0-9A-Za-z]{2,}", text.lower())
         return " ".join(words[:6])
 
+    def rerank(self, question: str, listing: str) -> str:
+        """One compact call: ids of the best <=20 entries, ordered. Errors propagate to the caller's fallback."""
+        system = ("Rank knowledge entries for answering the question. Each line: id | date | source type | start of entry. "
+                  "Reply with up to 20 ids, best first, comma-separated, nothing else. Prefer entries that directly answer, "
+                  "then current-year and authoritative ones (drive > kb > discord-note), then the newest. Skip off-topic entries.")
+        return self._complete(system, f"Question: {question}\n\n{listing}")
+
+    def check_grounded(self, question: str, answer: str, context_block: str) -> bool | None:
+        """Second pass: is every claim in the answer supported by the numbered entries?
+
+        True / False, or None when the check itself fails (the answer then stands).
+        """
+        system = (
+            "You verify answers. Reply with exactly one word: SUPPORTED if every factual claim "
+            "in the answer (names, dates, places, numbers) is stated in the entries, otherwise "
+            "UNSUPPORTED. Ignore citations, greetings, and formatting."
+        )
+        user = f"Question:\n{question}\n\nEntries:\n{context_block}\n\nAnswer:\n{answer}"
+        try:
+            verdict = self._complete(system, user).strip().upper()
+        except LLMError:
+            return None
+        if verdict.startswith("UNSUPPORTED"):
+            return False
+        if verdict.startswith("SUPPORTED"):
+            return True
+        return None
+
     def _complete(self, system: str, user: str) -> str:
+        if primary_exhausted():
+            raise LLMError("primary exhausted (cached 429)")
+        try:
+            return self._post(system, user)
+        except LLMError as exc:
+            if "HTTP 429" in str(exc):
+                mark_exhausted()
+                log.warning("llm 429 from %s; skipping the model for 15 min (backup mode)", self.model)
+                try:
+                    import counters
+
+                    counters.bump("llm_429", self.model, quiet=True)
+                except Exception:
+                    pass
+            raise
+
+    def _post(self, system: str, user: str) -> str:
         url = self.base_url if self.base_url.endswith("/chat/completions") else self.base_url + "/chat/completions"
         payload = {
             "model": self.model,
