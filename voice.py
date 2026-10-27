@@ -16,7 +16,6 @@ import tomllib
 from pathlib import Path
 
 from blocklist import Blocklist, blocklist_from_settings
-from tiers import parse_channel_tiers, parse_tier_roles, parse_tiers
 
 ROOT = Path(__file__).resolve().parent
 
@@ -111,6 +110,13 @@ DEFAULT_SENSITIVE = (
     "social security",
     "home address",
 )
+
+
+def _visibility(value) -> str:
+    text = str(value or "").strip().casefold()
+    if text == "approval":
+        return "approval"
+    return "public"
 
 
 def _role_list(value) -> list[str]:
@@ -211,9 +217,8 @@ class RuntimeConfig:
         self.terms_url = ""
         self.privacy_url = ""
         self.admin_roles: list[str] = []
-        self.tiers = parse_tiers(None)
-        self.tier_roles = parse_tier_roles(None, self.tiers)
-        self.channel_tiers = parse_channel_tiers(None, self.tiers)
+        self.docs_visibility = "public"
+        self.answer_from = "knowledge"
         self.cite_sources = True
         self.officer_role = "an officer"
         self.officer_channel = ""
@@ -265,7 +270,7 @@ class RuntimeConfig:
         self.display_title = _one_line(data.get("display_title"), "Discord bot", 80)
         self.org_name = _one_line(data.get("org_name"), "this server", 80)
         self.max_answer_chars = _clamp(data.get("max_answer_chars", 600), 600, 80, 2000)
-        self.max_context_snippets = _clamp(data.get("max_context_snippets", 12), 12, 1, 12)
+        self.max_context_snippets = _clamp(data.get("max_context_snippets", 12), 12, 1, 20)
         self.blocklist = blocklist_from_settings(data)
         self.allowed_channels = _string_list(data.get("allowed_channels"))
         self.public_channels = _string_list(data.get("public_channels"))
@@ -273,11 +278,12 @@ class RuntimeConfig:
         self.status_text = _one_line(data.get("status_text"), "Always listening... | /help", 128)
         self.terms_url = _http_url(data.get("terms_url"))
         self.privacy_url = _http_url(data.get("privacy_url"))
-        self.admin_roles = _role_list(data.get("admin_roles"))
-        self.tiers = parse_tiers(data.get("tiers"))
-        self.tier_roles = parse_tier_roles(data.get("tier_roles"), self.tiers)
-        self.channel_tiers = parse_channel_tiers(data.get("channel_tiers"), self.tiers)
+        self.admin_roles = _role_list(data.get("admin_roles"))  # deprecated, ignored: /admin needs Administrator
+        self.docs_visibility = _visibility(data.get("docs_visibility"))
+        self.answer_from = "knowledge_and_messages" if str(data.get("answer_from", "knowledge")).strip() == "knowledge_and_messages" else "knowledge"
         self.cite_sources = _bool(data.get("cite_sources"), True)
+        self.verify_min_yes = _clamp(data.get("verify_min_yes", 2), 2, 1, 20)
+        self.verify_max_no = _clamp(data.get("verify_max_no", 0), 0, 0, 20)
         self.officer_role = _one_line(data.get("officer_role"), "an officer", 80)
         self.officer_channel = _one_line(data.get("officer_channel"), "", 80).lstrip("#")
         if "sensitive_topics" in data:

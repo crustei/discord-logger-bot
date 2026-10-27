@@ -8,9 +8,10 @@ it does not leave emails, phone numbers, street addresses, or similar patterns.
 A configurable citation line names the doc title or channel and the date, without
 a link.
 
-Knowledge files are used when their ``tier`` is at or below the asker's tier.
-A file with no tier, or an older ``visibility: public`` line, is the lowest
-tier. General questions rank ``facts.md`` and other docs above loose messages.
+Knowledge files answer directly when ``docs_visibility`` is ``public`` (the
+default) or a file's front matter says ``visibility: public``. ``approval``
+holds those files for an officer. General questions rank ``facts.md`` and
+other docs above loose messages.
 """
 from __future__ import annotations
 
@@ -35,10 +36,44 @@ _EXPANSIONS = {
     "application": ("apply", "recruitment"),
     "meeting": ("session", "meet"),
     "session": ("meeting",),
-    "meet": ("meeting", "session"),
     "schedule": ("date", "when"),
     "cost": ("price",),
     "price": ("cost",),
+    "lox": ("oxygen", "liquid"),
+    "ln2": ("nitrogen", "liquid"),
+    "vendor": ("supplier", "orders", "order"),
+    "supplier": ("vendor", "orders"),
+    "located": ("location", "campus", "based", "university"),
+    "location": ("located", "campus", "room"),
+    "where": ("location", "room"),
+    "meet": ("meeting", "session", "room", "location"),
+    "team": ("teams", "subteam"),
+    "budget": ("funding", "cost"),
+    "sponsor": ("sponsors", "funding", "funded"),
+    "advisor": ("faculty", "adviser"),
+    # Concept synonyms: question words that never appear in spec lines.
+    "heavy": ("mass", "lbs", "kg", "weight"),
+    "weight": ("mass", "lbs", "kg"),
+    "weigh": ("mass", "lbs", "kg", "weight"),
+    "weighs": ("mass", "lbs", "kg", "weight"),
+    "tall": ("length", "ft", "height"),
+    "long": ("length", "ft"),
+    "length": ("ft", "long"),
+    "big": ("length", "diameter", "mass"),
+    "size": ("length", "diameter"),
+    "wide": ("diameter",),
+    "high": ("apogee", "altitude", "ft"),
+    "altitude": ("apogee", "ft"),
+    "apogee": ("altitude",),
+    "fast": ("velocity", "mach", "speed"),
+    "speed": ("velocity", "mach"),
+    "power": ("thrust", "lbf"),
+    "powerful": ("thrust", "lbf"),
+    "thrust": ("lbf",),
+    "expensive": ("cost", "price", "budget"),
+    "when": ("date", "time"),
+    "fuel": ("propellant", "lox"),
+    "specs": ("mass", "length", "apogee", "thrust", "diameter"),
 }
 
 
@@ -48,19 +83,29 @@ def expand_terms(question: str) -> list[str]:
 
     found: list[str] = []
     seen = {token.casefold() for token in tokens_for(question)}
-    for token in list(seen):
+    words = set(re.findall(r"[0-9a-z]{2,}", (question or "").casefold()))
+    for token in sorted(seen | words):
         if len(token) > 4 and token.endswith("s") and token[:-1] not in seen:
             found.append(token[:-1])
         for extra in _EXPANSIONS.get(token, ()):
             if extra not in seen and extra not in found:
                 found.append(extra)
-    return found[:12]
+    return found[:16]
+
+
+def doc_is_public(hit, default_visibility: str) -> bool:
+    """Per-file front matter wins. Otherwise the ``docs_visibility`` setting."""
+    choice = str(getattr(hit, "visibility", "") or "").strip().casefold()
+    if choice not in {"public", "approval"}:
+        choice = str(default_visibility or "public").strip().casefold()
+    return choice != "approval"
 
 
 def about_self(question: str) -> bool:
     """True when the asker is asking what they themselves said or wrote."""
     text = " ".join((question or "").casefold().split())
-    return re.search(r"\b(did i|do i|have i|i say|i said|i write|i wrote|i mention|i mentioned)\b", text) is not None
+    # "How do I join" is a how-to, not a question about the asker's own messages.
+    return re.search(r"\b(?:did|have|do) i (?:say|write|mention|post|ask)\b|\bi (?:said|wrote|mentioned|posted)\b|\bwhat did i\b|\bmy (?:messages?|posts?)\b", text) is not None
 
 
 def _topic_hit(question: str, topic: str) -> bool:
@@ -75,6 +120,7 @@ def asks_for_private_detail(
     topics,
     hits,
     asker_id: str,
+    docs_visibility: str = "public",
 ) -> bool:
     """Hold questions about a specific person's private information.
 
@@ -102,7 +148,7 @@ def asks_for_private_detail(
             if part.casefold() in text and re.search(r"\b(say|said|email|phone|grade|address|quote)\b", text):
                 return True
     if re.search(r"\bhow much\b", text):
-        if not any(getattr(hit, "kind", "") == "doc" for hit in hits or []):
+        if not any(getattr(hit, "kind", "") == "doc" and doc_is_public(hit, docs_visibility) for hit in hits or []):
             return True
     return False
 
@@ -252,30 +298,82 @@ def synthesize(question: str, hits) -> str:
     return sentence
 
 
-def citation_line(hits) -> str:
-    """Doc title or channel, plus a date. No paths and no links."""
-    from retrieve import day_of
+_LINK = re.compile(r"https://(?:discord\.com/channels/\d+/\d+/\d+|docs\.google\.com/\S+?|drive\.google\.com/\S+?)(?=[\s),;]|$)")
 
-    parts: list[str] = []
-    seen: set[str] = set()
-    for hit in hits or []:
-        if getattr(hit, "kind", "") == "doc":
-            title = (getattr(hit, "title", "") or "note").strip() or "note"
-            when = day_of(getattr(hit, "modified", None) or getattr(hit, "timestamp", None))
-            label = f"{title}, {when}" if when != "unknown-date" else title
-        else:
-            channel = getattr(hit, "channel_name", None) or "channel"
-            when = day_of(getattr(hit, "timestamp", None))
-            label = f"#{channel}, {when}" if when != "unknown-date" else f"#{channel}"
-        if label in seen:
-            continue
-        seen.add(label)
-        parts.append(label)
-        if len(parts) >= 3:
-            break
-    if not parts:
-        return ""
-    return "Based on: " + "; ".join(parts)
+
+def _source_links_map() -> dict:
+    """Optional config/source_links.json: {"doc title or source name": "https://drive url"}."""
+    import json
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent / "config" / "source_links.json"
+    try:
+        return {k.casefold(): v for k, v in json.loads(path.read_text()).items()}
+    except (OSError, ValueError):
+        return {}
+
+
+def source_links(hit) -> list[str]:
+    """Bare links for one entry: its cited Discord or Drive URLs, else a jump link, else a short title."""
+    text = getattr(hit, "text", "") or ""
+    cited = re.findall(r"source:\s*([^\n]+)", text, re.I)
+    links = [m for c in cited for m in _LINK.findall(c)]
+    src = getattr(hit, "source", "") or ""
+    links += _LINK.findall(src)
+    if not links and getattr(hit, "kind", "") != "doc" and getattr(hit, "message_id", None):
+        links.append(f"https://discord.com/channels/{hit.guild_id}/{hit.channel_id}/{hit.message_id}")
+    if not links:
+        known = _source_links_map()
+        for name in [c.strip().rstrip(").") for c in cited] + [src, getattr(hit, "title", "") or ""]:
+            if name and name.casefold() in known:
+                links.append(known[name.casefold()])
+                break
+    # Bare links only: an entry with no Discord/Drive URL is not cited (never a title, never truncated).
+    return [l for l in dict.fromkeys(links) if l.startswith("http")]
+
+
+_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{2,}")
+_FILLER = {"the", "and", "for", "with", "that", "this", "was", "were", "are", "is", "has", "have", "acme",
+           "isn't", "stated", "previous", "current", "from", "its", "not", "but", "year", "role"}
+
+
+def used_hits(hits, answer: str):
+    """Entries the answer actually draws on: they contain its names/numbers or several of its words."""
+    body = (answer or "").split("\n\nBased on")[0]
+    words = {w.casefold() for w in _WORD.findall(body)} - _FILLER
+    names = {w.casefold() for w in re.findall(r"\b(?:[A-Z][a-z]+|[A-Z0-9][A-Z0-9-]+|\d[\d,./-]*)\b", body)} - _FILLER
+    scored = []
+    for i, hit in enumerate(hits or []):
+        hay = (getattr(hit, "text", "") or "").casefold()
+        hay_words = set(_WORD.findall(hay))
+        name_hits = sum(1 for n in names if n in hay_words or n in hay)
+        overlap = len(words & hay_words)
+        if name_hits >= 1 and overlap >= 2 or overlap >= 4:
+            scored.append((name_hits * 3 + overlap, -i, hit))
+    scored.sort(key=lambda t: (t[0], t[1]), reverse=True)
+    if not scored:
+        return list(hits or [])[:1]
+    best = scored[0][0]
+    return [h for sc, _, h in scored if sc >= best * 0.5]
+
+
+DISCORD_MESSAGE_LIMIT = 2000  # Discord's hard cap on one message's content
+
+
+def citation_line(hits, answer: str = "", budget: int | None = None) -> str:
+    """One line of bare, comma-separated source links for entries the answer used.
+
+    Whole links only: a link that would not fit in ``budget`` characters is dropped, never cut.
+    """
+    cap = DISCORD_MESSAGE_LIMIT if budget is None else min(budget, DISCORD_MESSAGE_LIMIT)
+    links: list[str] = []
+    for hit in used_hits(hits, answer) if answer else list(hits or [])[:3]:
+        for link in source_links(hit):
+            if link in links or len(links) >= 3:
+                continue
+            if len("Based on: " + ", ".join(links + [link])) <= cap:
+                links.append(link)
+    return "Based on: " + ", ".join(links) if links else ""
 
 
 def unknown_reply(runtime) -> str:
@@ -400,6 +498,11 @@ def _clean_model_text(body: str, hits) -> str:
     return limit_sentences(strip_source_labels(redact_pii(strip_author_names(body or "", hits)), hits), 3)
 
 
+def _footer_budget(text: str, runtime, limit) -> int:
+    cap = limit if limit is not None else getattr(runtime, "max_answer_chars", DISCORD_MESSAGE_LIMIT)
+    return min(cap, DISCORD_MESSAGE_LIMIT) - len(text or "") - 2
+
+
 def present_answer(question: str, body: str, hits, runtime, *, limit: int | None = None) -> str:
     """Filter a model reply. An irrelevant or failed reply becomes the refusal.
 
@@ -417,14 +520,14 @@ def present_answer(question: str, body: str, hits, runtime, *, limit: int | None
             text = unknown_reply(runtime)
             footer = ""
         else:
-            footer = citation_line(hits) if getattr(runtime, "cite_sources", True) else ""
+            footer = citation_line(hits, text, _footer_budget(text, runtime, limit)) if getattr(runtime, "cite_sources", True) else ""
     else:
         text = _clean_model_text(raw, hits)
         if not text or copies_source(text, hits) or copies_source(raw, hits):
             text = unknown_reply(runtime)
             footer = ""
         else:
-            footer = citation_line(hits) if getattr(runtime, "cite_sources", True) else ""
+            footer = citation_line(hits, text, _footer_budget(text, runtime, limit)) if getattr(runtime, "cite_sources", True) else ""
     from qa import fit_answer
 
     return fit_answer(text, footer, limit)

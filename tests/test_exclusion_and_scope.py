@@ -44,9 +44,7 @@ def test_shipped_config_is_generic_with_an_empty_blocklist(tmp_path):
     assert not is_excluded(None, "#Private-Channel", runtime.blocklist)
     assert runtime.ask_description() == "Ask about My Org"
     assert len(runtime.ask_description()) <= 100
-    assert runtime.tiers == ["non-member", "member", "officer", "executive"]
-    assert runtime.tier_roles == {tier: [] for tier in runtime.tiers}
-    assert runtime.channel_tiers == {}
+    assert runtime.docs_visibility == "public"
     assert runtime.cite_sources is True
     assert runtime.admin_roles == []
 
@@ -161,6 +159,7 @@ def test_purge_removes_excluded_messages_and_edits(db, tmp_path):
     assert db.execute("SELECT COUNT(*) FROM messages_fts WHERE message_id='secret'").fetchone()[0] == 0
 
 
+@pytest.mark.messages
 def test_other_members_are_held_and_invisible_channels_are_dropped(db, tmp_path):
     add(db, id="mine", author_id="1001", content="I will bring the purchase order form on Friday.")
     add(

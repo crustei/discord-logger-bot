@@ -1,6 +1,7 @@
+import pytest
 """Synthesized answers, knowledge-file visibility, and doc-first ranking."""
 
-from answerstyle import redact_pii, synthesize, verbatim_overlap
+from answerstyle import doc_is_public, redact_pii, synthesize, verbatim_overlap
 from qa import handle_question
 from retrieve import Hit, merge_hits
 from tests.conftest import add
@@ -50,10 +51,11 @@ def test_facts_rank_ahead_of_the_askers_messages():
     assert ranked[1].text.startswith("I think")
 
 
+@pytest.mark.messages
 def test_public_knowledge_answers_directly_and_beats_a_newer_message(db, tmp_path):
     runtime = _runtime(
         tmp_path,
-        'cite_sources = true\nofficer_role = "an officer"\n',
+        'docs_visibility = "public"\ncite_sources = true\nofficer_role = "an officer"\n',
     )
     docs = tmp_path / "notes"
     docs.mkdir()
@@ -86,6 +88,53 @@ def test_public_knowledge_answers_directly_and_beats_a_newer_message(db, tmp_pat
     assert result.context_block.find("1 November 2026") < result.context_block.find("December")
     assert result.snippets[0].kind == "doc"
     assert "December" not in result.text
+
+
+def test_approval_visibility_holds_a_doc_unless_the_file_says_public(db, tmp_path):
+    runtime = _runtime(tmp_path, 'docs_visibility = "approval"\n')
+    docs = tmp_path / "notes"
+    docs.mkdir()
+    note = docs / "facts.md"
+    note.write_text(
+        "---\ntitle: Key facts\nvisibility: approval\n---\n\nRecruitment applications open on 1 November 2026.\n",
+        encoding="utf-8",
+    )
+    held = handle_question(
+        db,
+        "When is recruitment?",
+        asker_id="1001",
+        channel_id="10",
+        channel_name="general",
+        visible={"10", "general"},
+        here={"10", "general"},
+        excluded=runtime.blocklist,
+        docs_dir=str(docs),
+        llm=Recording(),
+        runtime=runtime,
+    )
+    assert held.kind == "pending"
+    assert held.llm_called is False
+    assert doc_is_public(held.snippets[0], "approval") is False
+
+    note.write_text(
+        "---\ntitle: Key facts\nvisibility: public\n---\n\nRecruitment applications open on 1 November 2026.\n",
+        encoding="utf-8",
+    )
+    direct = handle_question(
+        db,
+        "When is recruitment?",
+        asker_id="1001",
+        channel_id="10",
+        channel_name="general",
+        visible={"10", "general"},
+        here={"10", "general"},
+        excluded=runtime.blocklist,
+        docs_dir=str(docs),
+        llm=Recording(),
+        runtime=runtime,
+    )
+    assert direct.kind == "answer"
+    assert "1 November 2026" in direct.context_block
 
 
 class Scripted:
@@ -180,16 +229,16 @@ def test_snippet_keeps_whole_words():
     from retrieve import snippet
 
     note = (
-        "Discussed the new schedule, FAR, and the TANGERInE launch with the avionics "
+        "Discussed the new schedule, FAR, and the Skylark launch with the avionics "
         "team after the design review on Monday morning in the shop."
     )
-    text = snippet(note, "What is TANGERInE?")
+    text = snippet(note, "What is Skylark?")
     assert text.split()[0] == "Discussed"
     prefix = "Discussed the new schedule, FAR, and the "
-    long = prefix + "TANGERInE " + ("detail " * 100)
+    long = prefix + "Skylark " + ("detail " * 100)
     assert len(long) > 420
     assert len(prefix) > 40
-    window = snippet(long, "TANGERInE", size=80)
+    window = snippet(long, "Skylark", size=80)
     body = window.replace("…", " ")
     source_words = set(long.split())
     assert body.split()
@@ -202,33 +251,33 @@ def test_what_is_ranks_a_topic_prefix_ahead_of_mentions():
 
     defined = Hit(
         kind="doc",
-        text="TANGERInE: our high-altitude rocket.",
+        text="Skylark: our high-altitude rocket.",
         title="Key facts",
         path="docs/facts.md",
         score=-2,
     )
     mention = Hit(
         kind="doc",
-        text="Discussed the new schedule, FAR, and the TANGERInE flight.",
-        title="TANGERInE flight",
+        text="Discussed the new schedule, FAR, and the Skylark flight.",
+        title="Skylark flight",
         path="docs/launch-notes.md",
         score=-0.1,
     )
-    ranked = merge_hits([mention, defined], [], prefer_docs=True, question="What is TANGERInE?")
-    assert ranked[0].text.startswith("TANGERInE:")
-    assert ranked[1].title == "TANGERInE flight"
+    ranked = merge_hits([mention, defined], [], prefer_docs=True, question="What is Skylark?")
+    assert ranked[0].text.startswith("Skylark:")
+    assert ranked[1].title == "Skylark flight"
     crowd = [
         Hit(
             kind="doc",
-            text="Discussed the TANGERInE flight.",
-            title="TANGERInE flight",
+            text="Discussed the Skylark flight.",
+            title="Skylark flight",
             path=f"docs/n{index}.md",
             score=-0.1,
         )
         for index in range(20)
     ]
-    kept = _keep_best(crowd + [defined], "What is TANGERInE?")
-    assert kept[0].text.startswith("TANGERInE:")
+    kept = _keep_best(crowd + [defined], "What is Skylark?")
+    assert kept[0].text.startswith("Skylark:")
     who = Hit(kind="message", text="Asked Riley about the bay.", title="Riley")
     note = Hit(kind="doc", text="Riley sent the checklist.", title="Sunday session", path="docs/meetings.md")
     ordered = merge_hits([note], [who], prefer_docs=True, question="Who is Riley?")

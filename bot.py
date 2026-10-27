@@ -23,6 +23,7 @@ import logging
 import os
 import sys
 import threading
+import time
 
 import discord
 from discord import app_commands
@@ -43,19 +44,11 @@ from db import (
     upsert_message,
 )
 from llm import provider_from_env
+from tiers import is_officer, member_tier
+from permissions import channel_guild_id, here_keys, invocation_allowed, is_excluded, snowflake_id, visible_channel_ids
+from qa import answer_in_new_connection
 from asklog import record_in_new_connection
 from catchup import run_catchup
-from permissions import (
-    channel_guild_id,
-    guild_channel_viewers,
-    here_keys,
-    invocation_allowed,
-    is_excluded,
-    role_tokens,
-    snowflake_id,
-    visible_channel_ids,
-)
-from qa import answer_in_new_connection
 from slashadmin import actor_is_admin, audit, register_admin_commands, require_admin
 from voice import get_runtime
 
@@ -112,7 +105,7 @@ def help_text(runtime, *, admin: bool = False) -> str:
         "The bot only replies when you do one of those. It does not post on its own.",
         "",
         "What it can see",
-        "It searches the knowledge files and messages in channels you can view, and only notes at or below your tier. Channels on the blocklist are not logged and are not used.",
+        "It searches the knowledge files and messages in channels you can view. Channels on the blocklist are not logged and are not used.",
         "Messages from members who opted out are not stored and are not used.",
         "If an allowlist is set, it only answers in those channels. An empty allowlist means every channel that is not blocklisted.",
         "Answers are short paraphrases. A line at the end can name the doc title or channel and the date.",
@@ -142,15 +135,15 @@ def help_text(runtime, *, admin: bool = False) -> str:
             [
                 "",
                 "Admin commands",
-                "Only you can see this section. Discord also limits /admin to members with Manage Server.",
+                "Only you can see this section. Discord limits /admin to server Administrators.",
                 "/admin blocklist add, remove, and list take a channel and an optional name. Add deletes stored rows for that channel.",
                 "/admin approvals list, approve, and deny use the same queue as admin.py.",
                 "/admin optout add, remove, and list take a member.",
                 "/admin member forget deletes one member's stored data after you confirm.",
                 "/admin bot status shows uptime, messages, the model, the blocklist, and pending approvals.",
                 "/admin bot reload re-reads the persona and settings. /admin bot set-status changes the presence text.",
-                "/admin tier set-channel, set-role, and show map channels and roles onto the tier list.",
-                "When admin_roles lists role names or role ids, you also need one of those roles.",
+                "/admin roles show lists which roles give officer or member access. /admin roles set tier role maps one; /admin roles remove role unmaps it. Administrators always have full access.",
+                "Admin commands need the Discord Administrator permission.",
             ]
         )
     return "\n".join(lines)
@@ -184,6 +177,9 @@ class QABot(discord.Client):
         self._purge_if_needed()
         self.llm = provider_from_env()
         self._register_commands()
+        from watchdog import GatewayWatchdog
+        self.watchdog = GatewayWatchdog(lambda: (not self.is_closed()) and self.is_ready() and self.ws is not None
+                                        and self.ws.socket is not None and not self.ws.socket.closed)
 
     def _watching(self, guild_id) -> bool:
         return watching_guild(guild_id, self.cfg.guild_ids)
@@ -242,10 +238,38 @@ class QABot(discord.Client):
         async def help_command(interaction: discord.Interaction):
             await self.handle_help(interaction)
 
+        async def verify_answer(interaction: discord.Interaction, message: discord.Message):
+            await self.handle_verify(interaction, message)
+
+        self.tree.add_command(app_commands.ContextMenu(name="Verify answer", callback=verify_answer))
+
         register_admin_commands(self)
 
+    async def _loop_beat(self) -> None:
+        # Proves the event loop is not blocked; the watchdog thread also checks connected+ready.
+        while not self.is_closed():
+            self.watchdog.beat()
+            await asyncio.sleep(10)
+
     async def setup_hook(self) -> None:
+        self.watchdog.start()
+        try:
+            from feedback import VoteButton
+            self.add_dynamic_items(VoteButton)  # officer rating buttons keep working after restarts
+        except Exception:
+            log.exception("feedback buttons not registered")
+        try:
+            import counters; counters.on_start()
+        except Exception:
+            log.exception("counters: start not recorded")
+        asyncio.get_running_loop().create_task(self._loop_beat())
         asyncio.create_task(self.snapshot_loop())
+        from diag import Diagnostics
+        self.diag = Diagnostics(self, db_path=self.cfg.db_path, docs_dir=self.cfg.docs_dir,
+                                log_path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.log"),
+                                guild_ids=tuple(g for g in (self.cfg.guild_ids or ()) if str(g).isdigit()), llm=self.llm)
+        self.diag.start()
+        self.watchdog.status_age = self.diag.status_age
         for gid in self.cfg.guild_ids:
             if not str(gid).strip().isdigit():
                 log.warning("GUILD_IDS entry %r is not a numeric snowflake; ignoring it", gid)
@@ -361,7 +385,23 @@ class QABot(discord.Client):
             runtime.max_answer_chars,
             self.llm.name,
         )
+        self._write_channel_tiers()
         self._start_catchup()
+
+    def _write_channel_tiers(self) -> None:
+        from tiers import seed_guild, write_channel_tiers
+        for guild in list(self.guilds):
+            if self._watching(guild.id):
+                try:
+                    seeded = seed_guild(guild)
+                    if seeded is not None:
+                        log.info("role tiers seeded from role names: %s role(s)", seeded)
+                except Exception:
+                    log.exception("role tier seed failed")
+                try:
+                    log.info("channel tiers written: %s", write_channel_tiers(guild))
+                except Exception:
+                    log.exception("channel tier snapshot failed")
 
     async def on_resumed(self) -> None:
         self._start_catchup()
@@ -379,6 +419,8 @@ class QABot(discord.Client):
                 await asyncio.to_thread(self._purge_if_needed)
                 await run_catchup(self, self.cfg.db_path, msg_row, get_runtime().blocklist,
                                   watching=self._watching)
+                if getattr(self, "diag", None) is not None:
+                    self.diag.last_catchup_ok = __import__("time").time()
             except Exception:
                 log.exception("catch-up failed")
 
@@ -450,22 +492,31 @@ class QABot(discord.Client):
         await asyncio.to_thread(self._purge_if_needed)
         cached = payload.cached_message
         if cached is not None and self._excluded_channel(cached.channel, cached.guild):
-            delete_message_everywhere(self.db, str(payload.message_id))
-            self.db.commit()
+            await asyncio.to_thread(self._db_write, delete_message_everywhere, str(payload.message_id))
             return
         cached_row = msg_row(cached) if cached else None
-        record_edit(self.db, str(payload.message_id), data["content"], data.get("edited_timestamp") or now(), cached_row)
-        self.db.commit()
+        await asyncio.to_thread(self._db_write, record_edit, str(payload.message_id), data["content"],
+                                data.get("edited_timestamp") or now(), cached_row)
 
     async def on_raw_message_delete(self, payload: discord.RawMessageDeleteEvent) -> None:
         if payload.guild_id is not None and not self._watching(payload.guild_id):
             return
-        mark_deleted(self.db, str(payload.message_id))
-        self.db.commit()
+        await asyncio.to_thread(self._db_write, mark_deleted, str(payload.message_id))
+
+    def _db_write(self, fn, *args):
+        """Run one write in its own connection, off the event loop."""
+        conn = connect(self.cfg.db_path)
+        try:
+            out = fn(conn, *args)
+            conn.commit()
+            return out
+        finally:
+            conn.close()
 
     def event(self, user, ev: str, detail: str = "") -> None:
-        if record_member_event(self.db, str(user.id), user.name, ev, detail, now()):
-            self.db.commit()
+        """Schedule a member event write off the event loop."""
+        asyncio.get_running_loop().create_task(asyncio.to_thread(
+            self._db_write, record_member_event, str(user.id), user.name, ev, detail, now()))
 
     async def on_member_join(self, member: discord.Member) -> None:
         if member.guild is None or not self._watching(member.guild.id):
@@ -507,7 +558,7 @@ class QABot(discord.Client):
             return
         runtime = get_runtime()
         runtime.reload_if_changed()
-        admin = actor_is_admin(interaction, runtime.admin_roles)
+        admin = actor_is_admin(interaction)
         await interaction.response.send_message(help_text(runtime, admin=admin)[:2000], ephemeral=True)
 
     async def handle_optout(self, interaction: discord.Interaction) -> None:
@@ -546,8 +597,10 @@ class QABot(discord.Client):
         if not question:
             await interaction.followup.send(runtime.say("empty_question"))
             return
-        text = await self._answer(question, interaction.guild, interaction.user, interaction.channel)
-        await interaction.followup.send(text[:2000])
+        text, rid = await self._answer_with_id(question, interaction.guild, interaction.user, interaction.channel)
+        sent = await interaction.followup.send(text[:2000], wait=True)
+        await self._after_answer(rid, sent, interaction.channel, interaction.user,
+                                 lambda **kw: interaction.followup.send(ephemeral=True, **kw))
 
     async def answer_mention(self, message: discord.Message) -> None:
         runtime = get_runtime()
@@ -568,10 +621,67 @@ class QABot(discord.Client):
             await message.reply(runtime.say("empty_question"), mention_author=False)
             return
         async with message.channel.typing():
-            text = await self._answer(question, message.guild, message.author, message.channel)
-        await message.reply(text[:2000], mention_author=False)
+            text, rid = await self._answer_with_id(question, message.guild, message.author, message.channel)
+        sent = await message.reply(text[:2000], mention_author=False)
+        # Mentions have no ephemeral channel; officers rate them via Apps > Verify answer.
+        await self._after_answer(rid, sent, message.channel, message.author, None)
+
+    async def _after_answer(self, rid, sent, channel, user, ephemeral_send) -> None:
+        """Link the public answer to its ask_log row; officers who used /ask get a private rating prompt."""
+        if rid is None:
+            return
+        try:
+            from feedback import link_message
+            await asyncio.to_thread(self._feedback_link, rid, getattr(sent, "id", None), getattr(channel, "id", None))
+        except Exception:
+            log.exception("feedback: answer link not saved")
+        if ephemeral_send is not None and is_officer(member_tier(user)):
+            from feedback import PROMPT, vote_view
+            try:
+                await ephemeral_send(content=PROMPT, view=vote_view(rid))
+            except Exception:
+                log.exception("feedback: rating prompt not sent")
+
+    def _feedback_link(self, rid, message_id, channel_id) -> None:
+        from db import connect
+        from feedback import link_message
+        conn = connect(self.cfg.db_path)
+        try:
+            link_message(conn, rid, message_id, channel_id)
+        finally:
+            conn.close()
+
+    def _feedback_lookup(self, message):
+        from db import connect
+        from feedback import resolve_message
+        conn = connect(self.cfg.db_path)
+        try:
+            return resolve_message(conn, message.id, getattr(message, "content", ""),
+                                   getattr(message, "created_at", None), getattr(message.channel, "id", None)
+                                   if getattr(message, "channel", None) is not None else None)
+        finally:
+            conn.close()
+
+    async def handle_verify(self, interaction: discord.Interaction, message: discord.Message) -> None:
+        """Apps > Verify answer: officers rate any bot answer privately, no pings."""
+        from feedback import NOT_OFFICER, PROMPT, vote_view
+        if not is_officer(member_tier(interaction.user)):
+            await interaction.response.send_message(NOT_OFFICER, ephemeral=True)
+            return
+        if getattr(message.author, "id", None) != getattr(self.user, "id", object()):
+            await interaction.response.send_message("That only works on my answers.", ephemeral=True)
+            return
+        rid = await asyncio.to_thread(self._feedback_lookup, message)
+        if rid is None:
+            await interaction.response.send_message("I can't find that answer in the question log.", ephemeral=True)
+            return
+        await interaction.response.send_message(PROMPT, view=vote_view(rid), ephemeral=True)
 
     async def _answer(self, question: str, guild, user, channel) -> str:
+        text, _ = await self._answer_with_id(question, guild, user, channel)
+        return text
+
+    async def _answer_with_id(self, question: str, guild, user, channel) -> tuple[str, int | None]:
         runtime = get_runtime()
         visible = visible_channel_ids(guild, user) | here_keys(channel) | set(runtime.public_channels)
         here = here_keys(channel)
@@ -591,20 +701,20 @@ class QABot(discord.Client):
                 excluded=runtime.blocklist,
                 docs_dir=self.cfg.docs_dir,
                 llm=self.llm,
-                asker_roles=role_tokens(user),
-                channel_viewers=guild_channel_viewers(guild) if guild is not None else None,
+                asker_tier=member_tier(user),
             )
         except Exception:
             log.exception("ask failed")
-            return "Something went wrong while looking that up. Try again in a minute."
+            return "Something went wrong while looking that up. Try again in a minute.", None
+        rid = None
         try:
-            await asyncio.to_thread(
+            rid = await asyncio.to_thread(
                 record_in_new_connection, self.cfg.db_path, question, result, asker_id=str(user.id)
             )
         except Exception:
             log.exception("ask log write failed")
-        log.info("ask kind=%s channel=%s", result.kind, getattr(channel, "id", None))
-        return result.text or runtime.say("refusal")
+        log.info("ask id=%s tier=%s outcome=%s", rid, member_tier(user), result.kind)
+        return result.text or __import__("answerstyle").unknown_reply(runtime), rid
 
 
 def optout_reply(conn, user_id, *, enabled: bool) -> str:
@@ -619,9 +729,39 @@ def optout_reply(conn, user_id, *, enabled: bool) -> str:
     )
 
 
+_LOCK_FH = None
+
+
+def acquire_single_instance_lock(path=None) -> bool:
+    """Hold an exclusive flock for the process lifetime; False if another copy holds it."""
+    import fcntl
+    global _LOCK_FH
+    path = path or os.path.join(os.path.dirname(os.path.abspath(__file__)), "bot.lock")
+    fh = open(path, "a+")
+    try:
+        fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        fh.close()
+        return False
+    fh.seek(0); fh.truncate(); fh.write(str(os.getpid())); fh.flush()
+    _LOCK_FH = fh
+    return True
+
+
 def main() -> None:
     load_dotenv()
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    import logfilter
+    logfilter.setup()
+    if not acquire_single_instance_lock():
+        log.error("another bot.py instance holds bot.lock; exiting")
+        sys.exit(0)
+    standby = os.path.join(os.path.dirname(os.path.abspath(__file__)), "STANDBY")
+    if os.path.exists(standby):
+        # Standby (e.g. a migration target): stay up without a gateway session until the file is removed.
+        log.warning("STANDBY file present; not connecting to Discord")
+        while os.path.exists(standby):
+            time.sleep(2)
+        log.warning("STANDBY removed; connecting")
     token = os.environ.get("DISCORD_BOT_TOKEN")
     if not token:
         sys.exit("DISCORD_BOT_TOKEN is not set")

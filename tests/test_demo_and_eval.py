@@ -1,3 +1,4 @@
+import pytest
 from demo import format_report
 from eval import run_cases
 from llm import ExtractiveProvider
@@ -8,6 +9,7 @@ class Boom:
         raise AssertionError("dry-run must not call the model")
 
 
+@pytest.mark.messages
 def test_dry_run_prints_three_sections_without_calling_the_model(sample_db):
     from demo import ask
 
@@ -34,6 +36,7 @@ def test_dry_run_prints_three_sections_without_calling_the_model(sample_db):
     assert "LLM: skipped (--dry-run)" in report
 
 
+@pytest.mark.messages
 def test_extractive_answer_stays_within_the_cap(sample_db):
     from demo import ask
     from voice import get_runtime
@@ -55,6 +58,7 @@ def test_extractive_answer_stays_within_the_cap(sample_db):
     assert result.llm_called is True
 
 
+@pytest.mark.messages
 def test_sample_blocklist_is_opt_in(sample_db):
     from demo import ask
 
@@ -86,6 +90,7 @@ def test_sample_blocklist_is_opt_in(sample_db):
     assert "1234" in (visible.context_block or "")
 
 
+@pytest.mark.messages
 def test_eval_cases_pass(sample_db):
     results = run_cases(sample_db)
     failed = [item for item in results if not item.ok]

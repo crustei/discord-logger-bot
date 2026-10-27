@@ -1,0 +1,42 @@
+flowchart LR
+  subgraph Discord["Discord (ACME guild)"]
+    GW[Gateway + REST API]
+  end
+  subgraph GCP["GCP project your-gcp-project · us-west1-b"]
+    subgraph VM["e2-micro VM 'discord-bot' (30 GB disk, 2 GB swap)"]
+      SVC["systemd: discord-bot.service<br/>run.sh → bot.py (QABot)"]
+      SYN["discord-bot-synthetic.timer (hourly)<br/>tools_local/synthetic_test.py<br/>~25 checks, ~7 Gemini calls"]
+      WK["discord-bot-weekly.timer (Sat 10:00 PT)<br/>trim_logs.sh + conditional DB maintenance"]
+      DIAG["In-bot Diagnostics<br/>light every 600 s / full every 3600 s<br/>wall-clock ticks + freeze detection"]
+      DB[("bot.db (SQLite + FTS)<br/>messages, docs, ask_log,<br/>opt-outs, approvals, meta")]
+      KB[/"knowledge/ public · member · officer<br/>(public/docs/privacy-and-terms.md)"/]
+      FILES[/"bot.log (master log)<br/>status.json · diag/counters.json<br/>STANDBY flag"/]
+    end
+  end
+  GEM[(Google Gemini API)]
+  subgraph BOX["Box (Grok Bot host)"]
+    RB["Frozen rollback copy<br/>MIGRATED marker blocks start"]
+    PULL["pull_from_vm.sh → vm_mirror/"]
+    PUSH["push_knowledge.sh<br/>(add/update + live reindex)"]
+    HB["heartbeat_check.sh → heartbeat_check_gcp.sh"]
+    RT["Routines: nightly check-in ~8 PM PT (always reports)<br/>Saturday recap"]
+    DRV[(example.edu Google Drive/Docs)]
+  end
+  SVC <-->|bot token, WebSocket/HTTPS| GW
+  SVC -->|~3 calls per /ask| GEM
+  SYN --> GEM
+  SYN -->|read-only checks| GW
+  SVC --- DIAG
+  SVC --> DB
+  SVC --> KB
+  DIAG --> FILES
+  SYN --> FILES
+  WK --> FILES
+  WK --> DB
+  RT --> HB
+  RT --> PULL
+  RT --> DRV
+  RT --> PUSH
+  PULL -.->|gcloud ssh via IAP tunnel only| VM
+  PUSH -.->|IAP SSH| KB
+  HB -.->|IAP SSH| FILES

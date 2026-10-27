@@ -65,7 +65,6 @@ class Case:
     forbid_verbatim: bool = False
     fail_llm: bool = False
     replies: tuple[str, ...] = ()
-    roles: tuple[str, ...] = ()
 
 
 @dataclass
@@ -85,7 +84,7 @@ CASES = [
         question="When did I say I would bring the purchase order form?",
         expect="answer",
         require_context=("purchase order form",),
-        require_posted=("#general", "2026-10-18"),
+        require_posted=("Based on: https://discord.com/channels/",),
         forbid_context=("1234", "99999", "submits the purchase order", "Static fire"),
         forbid_posted=("1234", "99999", "I will bring the purchase order form on Friday"),
         forbid_verbatim=True,
@@ -182,7 +181,7 @@ CASES = [
         here="general",
         question="standupnote",
         expect="answer",
-        exact_snippets=12,
+        exact_snippets=-1,  # -1: exactly the configured max_context_snippets
         forbid_context=("1234", "99999", "sponsor shortfall"),
         forbid_posted=("1234", "99999"),
     ),
@@ -194,7 +193,7 @@ CASES = [
         question="When is recruitment?",
         expect="answer",
         require_context=("1 November 2026",),
-        require_posted=("1 November 2026", "Key facts"),
+        require_posted=("1 November 2026",),
         require_before=(("1 November 2026", "December"),),
         forbid_posted=("December", "I think recruitment is in December"),
         forbid_verbatim=True,
@@ -234,14 +233,14 @@ CASES = [
         forbid_context=("Meeting Notes", "Solarium"),
     ),
     Case(
-        name="llm-failure-unknown",
+        name="llm-failure-backup-mode",
         asker="ethan",
         channels=ETHAN_CHANNELS,
         here="general",
         question="When are GMs?",
-        expect="empty",
-        require_posted=("don't know",),
-        forbid_posted=("Fridays at 3 PM", "Meeting Notes", "here are the notes"),
+        expect="answer",
+        require_posted=("Fridays at 3 PM", "answered without AI (backup mode)"),
+        forbid_posted=("Meeting Notes", "here are the notes"),
         fail_llm=True,
     ),
     Case(
@@ -277,52 +276,14 @@ CASES = [
         asker="ethan",
         channels=ETHAN_CHANNELS,
         here="general",
-        question="What is TANGERInE?",
+        question="What is Skylark?",
         expect="answer",
-        require_context=("TANGERInE: our high-altitude rocket.", "Discussed the new schedule"),
-        require_before=(("TANGERInE: our high-altitude rocket.", "TANGERInE flight"),),
+        require_context=("Skylark: our high-altitude rocket.", "Discussed the new schedule"),
+        require_before=(("Skylark: our high-altitude rocket.", "Skylark flight"),),
         require_posted=("club high-altitude rocket",),
         forbid_posted=("happen on", "October 24"),
         forbid_verbatim=True,
-        replies=("TANGERInE is the club high-altitude rocket.",),
-    ),
-    Case(
-        name="member-cannot-read-officer-fact",
-        asker="ethan",
-        channels=ETHAN_CHANNELS,
-        here="general",
-        question="What is the zelkova latch code?",
-        expect="empty",
-        roles=("member",),
-        require_posted=("don't know",),
-        forbid_context=("cedar-42", "cedar"),
-        forbid_posted=("cedar", "maple", "restricted", "hidden"),
-    ),
-    Case(
-        name="officer-can-read-officer-fact",
-        asker="ethan",
-        channels=ETHAN_CHANNELS,
-        here="general",
-        question="What is the zelkova latch code?",
-        expect="answer",
-        roles=("officer",),
-        require_context=("cedar-42",),
-        require_posted=("cedar", "42"),
-        forbid_context=("maple-7",),
-        forbid_posted=("maple", "restricted", "hidden"),
-        replies=("The zelkova latch code is recorded as cedar 42.",),
-    ),
-    Case(
-        name="non-member-only-public-facts",
-        asker="ethan",
-        channels=ETHAN_CHANNELS,
-        here="general",
-        question="What is the quillon drawer mark?",
-        expect="empty",
-        roles=(),
-        require_posted=("don't know",),
-        forbid_context=("maple-7", "cedar-42"),
-        forbid_posted=("maple", "cedar", "restricted", "hidden"),
+        replies=("Skylark is the club high-altitude rocket.",),
     ),
 ]
 
@@ -333,8 +294,13 @@ def _problems(case: Case, result, cap_chars: int, cap_snippets: int) -> list[str
         problems.append(f"decision {result.kind}, expected {case.expect}")
     if len(result.snippets) > cap_snippets:
         problems.append(f"{len(result.snippets)} snippets, cap is {cap_snippets}")
-    if case.exact_snippets is not None and len(result.snippets) != case.exact_snippets:
-        problems.append(f"{len(result.snippets)} snippets, expected {case.exact_snippets}")
+    want = case.exact_snippets
+    if want == -1:
+        from voice import get_runtime
+
+        want = min(get_runtime().max_context_snippets, 14)  # the sample has 14 matching notes
+    if want is not None and len(result.snippets) != want:
+        problems.append(f"{len(result.snippets)} snippets, expected {want}")
     posted_len = 0 if result.dry_run and result.kind == "answer" else len(result.text)
     if posted_len > cap_chars:
         problems.append(f"answer length {posted_len} exceeds {cap_chars}")
@@ -364,37 +330,20 @@ def _problems(case: Case, result, cap_chars: int, cap_snippets: int) -> list[str
     return problems
 
 
-def _sample_tier_roles(runtime) -> dict[str, list[str]]:
-    """Role map for these cases. Each default tier name also matches a role of that name.
-
-    Mappings already on the runtime are kept. The runtime object itself is not changed.
-    """
-    roles = {tier: list(runtime.tier_roles.get(tier, [])) for tier in runtime.tiers}
-    for tier in runtime.tiers:
-        label = tier.casefold()
-        if label not in {"non-member", "member", "officer", "executive"}:
-            continue
-        current = {item.casefold() for item in roles[tier]}
-        if label not in current:
-            roles[tier] = roles[tier] + [tier]
-    return roles
-
-
 def run_cases(conn=None) -> list[CaseResult]:
     runtime = get_runtime()
     runtime.reload_if_changed()
-    sample_roles = _sample_tier_roles(runtime)
     own_conn = conn is None
+    if conn is None:
+        if not SAMPLE_DB.is_file():
+            raise SystemExit("Missing sample/sample.db. Run: python sample/build_sample.py")
+        temp_dir = tempfile.mkdtemp(prefix="qa-eval-")
+        db_path = Path(temp_dir) / "eval.db"
+        shutil.copy(SAMPLE_DB, db_path)
+        conn = connect(db_path)
+    llm = ExtractiveProvider()
     results: list[CaseResult] = []
     try:
-        if conn is None:
-            if not SAMPLE_DB.is_file():
-                raise SystemExit("Missing sample/sample.db. Run: python sample/build_sample.py")
-            temp_dir = tempfile.mkdtemp(prefix="qa-eval-")
-            db_path = Path(temp_dir) / "eval.db"
-            shutil.copy(SAMPLE_DB, db_path)
-            conn = connect(db_path)
-        llm = ExtractiveProvider()
         for case in CASES:
             if case.fail_llm:
                 model = _FailingLLM()
@@ -413,8 +362,6 @@ def run_cases(conn=None) -> list[CaseResult]:
                 llm=model,
                 dry_run=False,
                 apply_sample_blocklist=True,
-                roles=list(case.roles),
-                tier_roles=sample_roles,
             )
             problems = _problems(case, result, runtime.max_answer_chars, runtime.max_context_snippets)
             detail = f"{result.kind} snippets={len(result.snippets)} len={len(result.text)}"
@@ -431,7 +378,7 @@ def run_cases(conn=None) -> list[CaseResult]:
             )
         )
     finally:
-        if own_conn and conn is not None:
+        if own_conn:
             conn.close()
     return results
 

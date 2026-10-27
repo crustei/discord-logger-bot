@@ -6,7 +6,7 @@ import discord
 
 from commandsync import sync_plan
 from db import record_admin_action
-from slashadmin import member_is_admin, mutate_blocklist
+from slashadmin import actor_is_admin, mutate_blocklist
 from tests.conftest import add, committed_runtime
 from voice import set_runtime
 
@@ -61,13 +61,11 @@ def test_sync_plan_clears_the_other_scope():
     assert again.needs_cache is False
 
 
-def test_member_is_admin_requires_manage_server_and_optional_role():
-    assert member_is_admin(True, ["5"], ["Officers"], []) is True
-    assert member_is_admin(False, ["5"], ["Officers"], []) is False
-    assert member_is_admin(True, ["5"], ["Officers"], ["officers"]) is True
-    assert member_is_admin(True, ["5"], ["Members"], ["9"]) is False
-    assert member_is_admin(True, ["9"], ["Members"], ["9"]) is True
-    assert member_is_admin(True, ["9"], ["Members"], ["Officers"]) is False
+def test_only_server_administrators_are_admins():
+    from types import SimpleNamespace as N
+    assert actor_is_admin(N(permissions=N(administrator=True), user=N(roles=[]))) is True
+    assert actor_is_admin(N(permissions=N(administrator=False, manage_guild=True), user=N(roles=[]))) is False
+    assert actor_is_admin(N(permissions=None, user=N(guild_permissions=N(administrator=True)))) is True
 
 
 def test_admin_group_replaces_top_level_reload(tmp_path, monkeypatch):
@@ -80,15 +78,13 @@ def test_admin_group_replaces_top_level_reload(tmp_path, monkeypatch):
     assert "reload" not in names
     assert "admin" in names
     admin = bot.tree.get_command("admin")
-    assert admin.default_permissions.manage_guild
+    assert admin.default_permissions.administrator
     assert admin.guild_only is True
     children = {command.name: command for command in admin.commands}
-    assert set(children) == {"blocklist", "approvals", "optout", "member", "bot", "tier"}
-    tier = children["tier"]
-    assert {command.name for command in tier.commands} == {"set-channel", "set-role", "show"}
+    assert set(children) == {"blocklist", "approvals", "optout", "member", "bot", "roles"}
     assert all(isinstance(command, discord.app_commands.Group) for command in admin.commands)
     payload = admin.to_dict(bot.tree)
-    assert payload["default_member_permissions"] == discord.Permissions(manage_guild=True).value
+    assert payload["default_member_permissions"] == discord.Permissions(administrator=True).value
     assert payload["dm_permission"] is False
     assert {option["type"] for option in payload["options"]} == {2}
     from voice import get_runtime
@@ -188,7 +184,7 @@ def test_blocklist_add_writes_the_local_file_and_purges(db, tmp_path, monkeypatc
         def __init__(self):
             self.guild = type("G", (), {"id": 1})()
             self.user = type("U", (), {"id": 9, "name": "ada", "roles": []})()
-            self.permissions = type("P", (), {"manage_guild": True})()
+            self.permissions = type("P", (), {"manage_guild": True, "administrator": True})()
             self.response = Response()
             self.channel = type("C", (), {"id": 10, "name": "general"})()
 
@@ -212,7 +208,8 @@ def test_blocklist_add_writes_the_local_file_and_purges(db, tmp_path, monkeypatc
     row = db.execute("SELECT action, user_id FROM admin_audit ORDER BY id DESC LIMIT 1").fetchone()
     assert row["action"] == "blocklist.add"
     assert row["user_id"] == "9"
-    assert "blocklist.add" in (tmp_path / "bot.log").read_text(encoding="utf-8")
+    assert db.execute("SELECT 1 FROM admin_audit WHERE action='blocklist.add'").fetchone()
+    assert not (tmp_path / "bot.log").exists()  # bot.log holds only errors and diagnostics
 
 
 def test_set_status_and_forget_confirm(db, tmp_path, monkeypatch):
@@ -247,7 +244,7 @@ def test_set_status_and_forget_confirm(db, tmp_path, monkeypatch):
         item = type("I", (), {})()
         item.guild = type("G", (), {"id": 1})()
         item.user = type("U", (), {"id": user_id, "name": "ada", "roles": []})()
-        item.permissions = type("P", (), {"manage_guild": manage})()
+        item.permissions = type("P", (), {"manage_guild": manage, "administrator": manage})()
         item.response = Response()
         item.channel = type("C", (), {"id": 10, "name": "general"})()
         return item

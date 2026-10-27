@@ -34,20 +34,21 @@ class FakeChan:
             yield m
 
 
-def test_catchup_fetches_after_newest_and_skips(tmp_path):
+def test_catchup_fetches_after_newest_and_skips(tmp_path, monkeypatch):
+    monkeypatch.setattr(catchup, "ALWAYS_SKIP", frozenset({"private-chat"}))
     db = str(tmp_path / "t.db")
     conn = connect(db)
-    for r in (_row(100), _row(200, "20", "other"), _row(300, "30", "secret")):
+    for r in (_row(100), _row(200, "20", "other"), _row(300, "30", "private-chat")):
         upsert_message(conn, r, allow_excluded=True)
     conn.commit(); conn.close()
     a = FakeChan(10, "general", [100, 101, 102])
     b = FakeChan(20, "other", [201], forbid=True)
-    c = FakeChan(30, "secret", [301])
+    c = FakeChan(30, "private-chat", [301])
     d = FakeChan(40, "empty", [401])
     guild = types.SimpleNamespace(id=1, me=None, text_channels=[a, b, c, d], threads=[])
     client = types.SimpleNamespace(guilds=[guild])
     msg_row = lambda m: _row(m, str(10), "general")
-    stats = asyncio.run(catchup.run_catchup(client, db, msg_row, ["secret"]))
+    stats = asyncio.run(catchup.run_catchup(client, db, msg_row, []))
     assert a.seen_after == 100 and c.seen_after is None and d.seen_after is None
     assert stats["saved"] == 2 and stats["errors"] == 1 and stats["skipped"] == 1
     conn = connect(db)

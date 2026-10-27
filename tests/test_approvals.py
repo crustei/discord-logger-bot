@@ -1,3 +1,4 @@
+import pytest
 from db import get_approval
 from qa import handle_question
 from tests.conftest import add
@@ -13,6 +14,7 @@ class Recording:
         return "From the notes."
 
 
+@pytest.mark.messages
 def test_pending_stores_context_and_does_not_call_the_model(db, tmp_path):
     add(
         db,
@@ -51,6 +53,7 @@ def test_pending_stores_context_and_does_not_call_the_model(db, tmp_path):
     assert row["question"].startswith("What did Avery say")
 
 
+@pytest.mark.messages
 def test_approve_posts_citation_and_deny_does_not_leak(db, tmp_path):
     from admin import approve_request, deny_request
 
@@ -86,8 +89,8 @@ def test_approve_posts_citation_and_deny_does_not_leak(db, tmp_path):
 
     text = approve_request(db, result.approval_id, Recording(), poster)
     assert posted[0][0] == "10"
-    assert "#general" in text
-    assert "2026-10-18" in text
+    assert "https://discord.com/channels/" in text  # bare jump link footer
+    assert "#general" not in text
     assert len(text) <= runtime.max_answer_chars
     assert get_approval(db, result.approval_id)["status"] == "approved"
     with pytest_raises_admin():

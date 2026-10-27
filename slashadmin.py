@@ -5,18 +5,18 @@ child of /admin is a subgroup:
 
 - /admin blocklist add|remove|list
 - /admin approvals list|approve|deny
-- /admin optout add|remove|list
+- /admin optout add|remove|status|list
 - /admin member forget
 - /admin bot status|reload|set-status
-- /admin tier set-channel|set-role|show
+- /admin roles show|set|remove
 
-``default_permissions`` is Manage Server on the top group. Each callback also
-checks Manage Server and, when ``admin_roles`` is non-empty, a role name or
-role id from that list. Replies are ephemeral. Writes go to the gitignored
+``default_permissions`` is Administrator on the top group and each callback
+checks the Administrator permission again (live, from the interaction). Replies are ephemeral. Writes go to the gitignored
 local settings file or the SQLite database.
 """
 from __future__ import annotations
 
+import asyncio
 import datetime as dt
 import logging
 
@@ -42,37 +42,18 @@ from db import (
     resolve_approval,
 )
 from qa import utcnow
-from tiers import TierError, assign_role_tier, format_tiers, set_channel_tier
 from voice import _one_line, get_runtime
 
 log = logging.getLogger("qa_bot")
 
 
-def member_is_admin(manage_guild: bool, role_ids, role_names, admin_roles) -> bool:
-    """Manage Server is required. An empty role list means that permission is enough."""
-    if not manage_guild:
-        return False
-    wanted = [str(item).strip() for item in (admin_roles or []) if str(item).strip()]
-    if not wanted:
-        return True
-    ids = {str(item) for item in role_ids}
-    names = {str(item).casefold() for item in role_names if str(item).strip()}
-    for item in wanted:
-        if item.isdigit() and item in ids:
-            return True
-        if item.casefold() in names:
-            return True
-    return False
-
-
-def actor_is_admin(interaction, admin_roles) -> bool:
+def actor_is_admin(interaction, _unused=None) -> bool:
+    """Server Administrators only (permissions as of this interaction)."""
     perms = getattr(interaction, "permissions", None)
-    manage = bool(getattr(perms, "manage_guild", False))
-    user = getattr(interaction, "user", None)
-    roles = list(getattr(user, "roles", []) or [])
-    role_ids = [str(getattr(role, "id", "")) for role in roles]
-    role_names = [str(getattr(role, "name", "")) for role in roles]
-    return member_is_admin(manage, role_ids, role_names, admin_roles)
+    if bool(getattr(perms, "administrator", False)):
+        return True
+    from tiers import is_admin
+    return is_admin(getattr(interaction, "user", None))
 
 
 def format_uptime(started_at: dt.datetime, now: dt.datetime) -> str:
@@ -219,12 +200,9 @@ async def require_admin(bot, interaction, action: str) -> bool:
     elif not bot._watching(getattr(guild, "id", None)):
         message = "This bot is not watching this server."
         reason = "denied: server is not watched"
-    elif not actor_is_admin(interaction, runtime.admin_roles):
-        if runtime.admin_roles:
-            message = "You need Manage Server and an admin role to use this command."
-        else:
-            message = "You need Manage Server to use this command."
-        reason = "denied: missing Manage Server or admin role"
+    elif not actor_is_admin(interaction):
+        message = "You need the Administrator permission to use this command."
+        reason = "denied: not a server Administrator"
     else:
         return True
     audit(bot, interaction, action, reason)
@@ -439,14 +417,43 @@ async def approvals_deny(bot, interaction, request_id: int, reason: str | None):
     await send(interaction, f"Denied #{request_id}.{notice}")
 
 
+def _db_call(bot, fn, *args):
+    """Run a DB call off the event loop on its own connection (falls back to bot.db in tests)."""
+    path = getattr(getattr(bot, "cfg", None), "db_path", None)
+    if not path:
+        return asyncio.to_thread(fn, bot.db, *args)
+
+    def run():
+        from db import connect
+        conn = connect(path)
+        try:
+            return fn(conn, *args)
+        finally:
+            conn.close()
+    return asyncio.to_thread(run)
+
+
+async def _defer(interaction):
+    defer = getattr(interaction.response, "defer", None)
+    is_done = getattr(interaction.response, "is_done", None)
+    if defer is not None and not (callable(is_done) and is_done()):
+        await defer(ephemeral=True)
+
+
 async def optout_add(bot, interaction, member: discord.User):
     if not await require_admin(bot, interaction, "optout.add"):
         return
+    await _defer(interaction)  # the purge can take longer than Discord's 3 s reply window
     try:
-        counts = add_opt_out(bot.db, str(member.id))
+        counts = await _db_call(bot, add_opt_out, str(member.id))
     except ValueError as exc:
         audit(bot, interaction, "optout.add", f"failed: {exc}")
         await send(interaction, str(exc))
+        return
+    except Exception as exc:
+        log.exception("optout.add failed for %s", member.id)
+        audit(bot, interaction, "optout.add", f"failed: {type(exc).__name__}")
+        await send(interaction, f"Opt-out failed ({type(exc).__name__}). Check bot.log.")
         return
     audit(bot, interaction, "optout.add", f"user {member.id}")
     await send(
@@ -459,8 +466,9 @@ async def optout_add(bot, interaction, member: discord.User):
 async def optout_remove(bot, interaction, member: discord.User):
     if not await require_admin(bot, interaction, "optout.remove"):
         return
+    await _defer(interaction)
     try:
-        removed = remove_opt_out(bot.db, str(member.id))
+        removed = await _db_call(bot, remove_opt_out, str(member.id))
     except ValueError as exc:
         audit(bot, interaction, "optout.remove", f"failed: {exc}")
         await send(interaction, str(exc))
@@ -471,6 +479,15 @@ async def optout_remove(bot, interaction, member: discord.User):
         return
     audit(bot, interaction, "optout.remove", f"user {member.id}")
     await send(interaction, f"Removed {member.id} from the opt-out list. New messages can be stored again.")
+
+
+async def optout_status(bot, interaction, member: discord.User):
+    if not await require_admin(bot, interaction, "optout.status"):
+        return
+    from db import is_opted_out
+    out = await _db_call(bot, is_opted_out, str(member.id))
+    audit(bot, interaction, "optout.status", f"user {member.id}: {'opted out' if out else 'not opted out'}")
+    await send(interaction, f"{member.id} is {'opted out' if out else 'not opted out'}.")
 
 
 async def optout_list(bot, interaction):
@@ -532,71 +549,63 @@ async def bot_set_status(bot, interaction, text: str):
     await send(interaction, f"Status set to: {stored}")
 
 
-async def tier_set_channel(bot, interaction, channel, tier: str):
-    if not await require_admin(bot, interaction, "tier.set-channel"):
+def format_roles(guild) -> str:
+    from tiers import CONFIGURABLE, guild_roles, role_map
+    mapping = guild_roles(guild.id)
+    lines = ["Administrators (Discord permission): full access, always."]
+    if mapping is None:
+        names = role_map()
+        lines.append("Not configured yet; using the role-name seed file.")
+        for tier in reversed(CONFIGURABLE):
+            got = sorted(r.name for r in getattr(guild, "roles", []) or [] if r.name.casefold() in names and names[r.name.casefold()] == tier)
+            lines.append(f"{tier.title()}: " + (", ".join(got) or "none"))
+    else:
+        by_id = {str(r.id): r for r in getattr(guild, "roles", []) or []}
+        for tier in reversed(CONFIGURABLE):
+            got = sorted((by_id[r].mention if r in by_id else f"deleted role {r}")
+                         for r, t in mapping.items() if t == tier)
+            lines.append(f"{tier.title()}: " + (", ".join(got) or "none"))
+    lines.append("Everyone else: public.")
+    return "\n".join(lines)
+
+
+async def roles_show(bot, interaction):
+    if not await require_admin(bot, interaction, "roles.show"):
         return
-    runtime = get_runtime()
-    runtime.reload_if_changed()
-    channel_id = str(channel.id) if channel is not None else None
-    name = getattr(channel, "name", None) if channel is not None else None
-    try:
-        text = set_channel_tier(
-            runtime.local_settings_path,
-            tier,
-            channel_id=channel_id,
-            channel_name=name,
-            tiers=runtime.tiers,
-            channel_tiers=runtime.channel_tiers,
-        )
-    except TierError as exc:
-        audit(bot, interaction, "tier.set-channel", f"failed: {exc}")
-        await send(interaction, str(exc))
+    audit(bot, interaction, "roles.show", "")
+    await send(interaction, format_roles(interaction.guild))
+
+
+async def roles_set(bot, interaction, tier: str, role):
+    if not await require_admin(bot, interaction, "roles.set"):
         return
-    runtime.reload()
-    audit(bot, interaction, "tier.set-channel", text)
+    from tiers import seed_guild, set_role
+    if getattr(role, "is_default", lambda: False)():
+        await send(interaction, "@everyone is already the public tier.")
+        return
+    seed_guild(interaction.guild)  # keep seeded roles when the first edit happens
+    old = set_role(interaction.guild.id, role.id, tier)
+    text = f"{role.name} now gives {tier} access." + (f" (was {old})" if old and old != tier else "")
+    audit(bot, interaction, "roles.set", f"role {role.id} -> {tier} (was {old})")
     await send(interaction, text)
 
 
-async def tier_set_role(bot, interaction, role, tier: str):
-    if not await require_admin(bot, interaction, "tier.set-role"):
+async def roles_remove(bot, interaction, role):
+    if not await require_admin(bot, interaction, "roles.remove"):
         return
-    runtime = get_runtime()
-    runtime.reload_if_changed()
-    role_id = str(role.id) if role is not None else None
-    name = getattr(role, "name", None) if role is not None else None
-    try:
-        text = assign_role_tier(
-            runtime.local_settings_path,
-            tier,
-            role_id=role_id,
-            role_name=name,
-            tiers=runtime.tiers,
-            tier_roles=runtime.tier_roles,
-        )
-    except TierError as exc:
-        audit(bot, interaction, "tier.set-role", f"failed: {exc}")
-        await send(interaction, str(exc))
-        return
-    runtime.reload()
-    audit(bot, interaction, "tier.set-role", text)
-    await send(interaction, text)
-
-
-async def tier_show(bot, interaction):
-    if not await require_admin(bot, interaction, "tier.show"):
-        return
-    runtime = get_runtime()
-    runtime.reload()
-    text = format_tiers(runtime)
-    audit(bot, interaction, "tier.show", "ok")
+    from tiers import remove_role, seed_guild
+    seed_guild(interaction.guild)
+    old = remove_role(interaction.guild.id, role.id)
+    text = f"{role.name} no longer gives {old} access." if old else f"{role.name} wasn't mapped."
+    audit(bot, interaction, "roles.remove", f"role {role.id} (was {old})")
     await send(interaction, text)
 
 
 def register_admin_commands(bot) -> None:
     admin = app_commands.Group(
         name="admin",
-        description="Officer tools for the blocklist, approvals, tiers, and settings",
-        default_permissions=discord.Permissions(manage_guild=True),
+        description="Admin tools for the blocklist, approvals, roles, and settings",
+        default_permissions=discord.Permissions(administrator=True),
         guild_only=True,
     )
 
@@ -660,6 +669,11 @@ def register_admin_commands(bot) -> None:
         async def remove(self, interaction: discord.Interaction, member: discord.User):
             await optout_remove(bot, interaction, member)
 
+        @app_commands.command(name="status", description="Show whether a member is opted out")
+        @app_commands.describe(member="Member to check")
+        async def status(self, interaction: discord.Interaction, member: discord.User):
+            await optout_status(bot, interaction, member)
+
         @app_commands.command(name="list", description="List members who opted out")
         async def list_members(self, interaction: discord.Interaction):
             await optout_list(bot, interaction)
@@ -690,33 +704,30 @@ def register_admin_commands(bot) -> None:
         async def set_status(self, interaction: discord.Interaction, text: str):
             await bot_set_status(bot, interaction, text)
 
-    class TierGroup(app_commands.Group):
+    class RolesGroup(app_commands.Group):
         def __init__(self):
-            super().__init__(name="tier", description="Map roles and channels to access tiers")
+            super().__init__(name="roles", description="Which roles give officer or member access")
 
-        @app_commands.command(name="set-channel", description="Set the access tier for a channel")
-        @app_commands.describe(channel="Channel to map", tier="Tier name from settings")
-        async def set_channel(
-            self,
-            interaction: discord.Interaction,
-            channel: discord.app_commands.AppCommandChannel,
-            tier: str,
-        ):
-            await tier_set_channel(bot, interaction, channel, tier)
-
-        @app_commands.command(name="set-role", description="Map a role to an access tier")
-        @app_commands.describe(role="Role to map", tier="Tier name from settings")
-        async def set_role(self, interaction: discord.Interaction, role: discord.Role, tier: str):
-            await tier_set_role(bot, interaction, role, tier)
-
-        @app_commands.command(name="show", description="Show tiers, role mappings, and channel mappings")
+        @app_commands.command(name="show", description="Show the role to access-level mapping")
         async def show(self, interaction: discord.Interaction):
-            await tier_show(bot, interaction)
+            await roles_show(bot, interaction)
+
+        @app_commands.command(name="set", description="Give a role officer or member access")
+        @app_commands.describe(tier="Access level", role="Role to map")
+        @app_commands.choices(tier=[app_commands.Choice(name="officer", value="officer"),
+                                    app_commands.Choice(name="member", value="member")])
+        async def set_role(self, interaction: discord.Interaction, tier: app_commands.Choice[str], role: discord.Role):
+            await roles_set(bot, interaction, tier.value, role)
+
+        @app_commands.command(name="remove", description="Stop a role from giving officer or member access")
+        @app_commands.describe(role="Role to unmap")
+        async def remove(self, interaction: discord.Interaction, role: discord.Role):
+            await roles_remove(bot, interaction, role)
 
     admin.add_command(BlocklistGroup())
+    admin.add_command(RolesGroup())
     admin.add_command(ApprovalsGroup())
     admin.add_command(OptoutGroup())
     admin.add_command(MemberGroup())
     admin.add_command(BotGroup())
-    admin.add_command(TierGroup())
     bot.tree.add_command(admin)

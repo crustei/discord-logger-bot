@@ -337,13 +337,20 @@ def delete_user_data(conn, user_id: str) -> dict[str, int]:
     user_id = str(user_id).strip()
     if not user_id.isdigit():
         raise ValueError("Pass a numeric Discord user id.")
+    # Set-based deletes: one pass over each table (the old per-message loop scanned the
+    # FTS table once per message and took minutes for active members).
     ids = {row["id"] for row in conn.execute("SELECT id FROM messages WHERE author_id=?", (user_id,))}
     ids.update(
         row["message_id"]
         for row in conn.execute("SELECT message_id FROM messages_fts WHERE author_id=?", (user_id,))
     )
-    for message_id in ids:
-        delete_message_everywhere(conn, message_id)
+    conn.execute("CREATE TEMP TABLE IF NOT EXISTS _forget_ids(id TEXT PRIMARY KEY)")
+    conn.execute("DELETE FROM _forget_ids")
+    conn.executemany("INSERT OR IGNORE INTO _forget_ids(id) VALUES(?)", ((i,) for i in ids))
+    conn.execute("DELETE FROM messages WHERE id IN (SELECT id FROM _forget_ids)")
+    conn.execute("DELETE FROM messages_fts WHERE author_id=? OR message_id IN (SELECT id FROM _forget_ids)", (user_id,))
+    conn.execute("DELETE FROM message_edits WHERE message_id IN (SELECT id FROM _forget_ids)")
+    conn.execute("DELETE FROM _forget_ids")
     snapshots = conn.execute("DELETE FROM member_snapshots WHERE user_id=?", (user_id,)).rowcount
     events = conn.execute("DELETE FROM member_events WHERE user_id=?", (user_id,)).rowcount
     approval_ids = [
@@ -389,6 +396,7 @@ def add_opt_out(conn, user_id: str) -> dict[str, int]:
         "INSERT INTO opt_outs(user_id, created_at) VALUES(?, ?) ON CONFLICT(user_id) DO NOTHING",
         (user_id, created),
     )
+    conn.commit()  # the opt-out itself is saved before the (slower) purge
     return delete_user_data(conn, user_id)
 
 
@@ -562,7 +570,7 @@ def record_admin_action(
     detail: str,
     at: str | None = None,
 ) -> None:
-    """Store one officer action and append the same line to the bot log.
+    """Store one officer action in admin_audit (bot.log holds only errors and diagnostics).
 
     ``forget`` and opt-out do not remove these rows.
     """
@@ -578,16 +586,6 @@ def record_admin_action(
         (when, user_id, username, guild_id, action, detail),
     )
     conn.commit()
-    line = f"{when} admin user={user_id} name={username} guild={guild_id} action={action} detail={detail}"
-    log.info("%s", line)
-    path = Path(os.environ.get("BOT_LOG", "bot.log"))
-    try:
-        if path.parent != Path("."):
-            path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("a", encoding="utf-8") as handle:
-            handle.write(line + "\n")
-    except OSError:
-        log.exception("could not append the admin audit line to the bot log")
 
 
 def resolve_approval(

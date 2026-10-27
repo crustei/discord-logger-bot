@@ -1,0 +1,29 @@
+sequenceDiagram
+  participant DG as Diagnostics loop (in bot)
+  participant WD as GatewayWatchdog
+  participant F as status.json / bot.log / counters.json
+  participant SY as synthetic.timer (hourly)
+  participant WK as weekly.timer (Sat 10:00 PT)
+  participant RT as Box nightly check-in (~8 PM PT)
+  participant VM as VM via IAP SSH
+  participant E as Operator
+  loop every 15 s tick, wall-clock deadline
+    DG->>DG: wall vs monotonic gap > threshold?
+    opt host freeze detected
+      DG->>F: counters.bump(freeze)
+    end
+  end
+  DG->>F: light check every 600 s (gateway, loop, DB write, KB search, log, disk)
+  DG->>F: full check every 3600 s (+Gemini, pipeline, REST guild, commands, catch-up, DB size)
+  WD->>F: stale status / freeze → bump counter, recover
+  SY->>SY: ~25 checks on throwaway DB copy (~7 Gemini calls)
+  SY->>F: "ok 25/25" or FAIL line
+  WK->>F: trim bot.log, DB maintenance if needed
+  RT->>VM: heartbeat_check_gcp.sh
+  RT->>VM: pull_from_vm.sh → vm_mirror/
+  RT->>RT: scan changed Drive docs (example.edu)
+  opt knowledge changed
+    RT->>VM: push_knowledge.sh (add/update, live reindex)
+  end
+  RT->>E: short report every night (health, additions, issues)
+  Note over RT: Saturday recap uses same pull/push path
