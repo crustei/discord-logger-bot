@@ -77,6 +77,17 @@ _EXPANSIONS = {
 }
 
 
+def _typo_aliases() -> dict[str, str]:
+    try:
+        from voice import DEFAULT_TYPOS, get_runtime
+
+        found = dict(DEFAULT_TYPOS)
+        found.update(getattr(get_runtime(), "typo_aliases", {}) or {})
+        return {str(k).casefold(): str(v).casefold() for k, v in found.items()}
+    except Exception:
+        return {"cheif": "chief", "engineeer": "engineer"}
+
+
 def expand_terms(question: str) -> list[str]:
     """Extra search words. The original question is still searched."""
     from retrieve import tokens_for
@@ -84,12 +95,20 @@ def expand_terms(question: str) -> list[str]:
     found: list[str] = []
     seen = {token.casefold() for token in tokens_for(question)}
     words = set(re.findall(r"[0-9a-z]{2,}", (question or "").casefold()))
+    aliases = _typo_aliases()
     for token in sorted(seen | words):
+        alias = aliases.get(token)
+        if alias and alias not in seen and alias not in found:
+            found.append(alias)
         if len(token) > 4 and token.endswith("s") and token[:-1] not in seen:
             found.append(token[:-1])
         for extra in _EXPANSIONS.get(token, ()):
             if extra not in seen and extra not in found:
                 found.append(extra)
+        if alias:
+            for extra in _EXPANSIONS.get(alias, ()):
+                if extra not in seen and extra not in found:
+                    found.append(extra)
     return found[:16]
 
 
@@ -333,15 +352,29 @@ def source_links(hit) -> list[str]:
 
 
 _WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]{2,}")
-_FILLER = {"the", "and", "for", "with", "that", "this", "was", "were", "are", "is", "has", "have", "acme",
+_FILLER = {"the", "and", "for", "with", "that", "this", "was", "were", "are", "is", "has", "have",
            "isn't", "stated", "previous", "current", "from", "its", "not", "but", "year", "role"}
+
+
+def _filler() -> set[str]:
+    extra = set()
+    try:
+        from voice import get_runtime
+
+        short = (getattr(get_runtime(), "org_short_name", "") or "").casefold().strip()
+        if short:
+            extra.add(short)
+    except Exception:
+        pass
+    return _FILLER | extra
 
 
 def used_hits(hits, answer: str):
     """Entries the answer actually draws on: they contain its names/numbers or several of its words."""
     body = (answer or "").split("\n\nBased on")[0]
-    words = {w.casefold() for w in _WORD.findall(body)} - _FILLER
-    names = {w.casefold() for w in re.findall(r"\b(?:[A-Z][a-z]+|[A-Z0-9][A-Z0-9-]+|\d[\d,./-]*)\b", body)} - _FILLER
+    filler = _filler()
+    words = {w.casefold() for w in _WORD.findall(body)} - filler
+    names = {w.casefold() for w in re.findall(r"\b(?:[A-Z][a-z]+|[A-Z0-9][A-Z0-9-]+|\d[\d,./-]*)\b", body)} - filler
     scored = []
     for i, hit in enumerate(hits or []):
         hay = (getattr(hit, "text", "") or "").casefold()

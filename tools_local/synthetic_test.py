@@ -2,7 +2,7 @@
 """Hourly synthetic test harness, run OUTSIDE the bot process.
 
 Each run:
-  a) one Gemini call writes ~5 realistic ACME command invocations (falls back to a
+  a) one Gemini call writes ~5 realistic Example Rocketry Club command invocations (falls back to a
      built-in batch if the call fails); fixed coverage cases are always added;
   b) every registered slash command and subcommand runs through the bot's real
      handlers with fake interactions against a temp copy of bot.db (never the
@@ -38,11 +38,11 @@ RUN_LIMIT = 900  # one harness run
 TIER_RANK = {"non-member": 0, "member": 1, "officer": 2}
 TIER_ROLE = {"non-member": "Guest", "member": "Member", "officer": "Team Lead"}
 FALLBACK_BATCH = [
-    {"cmd": "ask", "tier": "non-member", "question": "What is ACME?"},
+    {"cmd": "ask", "tier": "non-member", "question": "What is Example Rocketry Club?"},
     {"cmd": "ask", "tier": "member", "question": "How heavy is Aurora?"},
     {"cmd": "ask", "tier": "officer", "question": "Who are the current team leads?"},
     {"cmd": "ask", "tier": "member", "question": "When are general meetings?"},
-    {"cmd": "ask", "tier": "non-member", "question": "Who is Jamie?"},
+    {"cmd": "ask", "tier": "non-member", "question": "Who is Alex?"},
 ]
 
 
@@ -293,7 +293,7 @@ def reply_format_ok(text):
 
 def gemini_batch(llm, n=5):
     prompt = (
-        f"Write {n} realistic Discord slash command invocations a member of ACME (a university rocketry "
+        f"Write {n} realistic Discord slash command invocations a member of Example Rocketry Club (a university rocketry "
         "club: rockets Aurora, Comet and Skylark, team leads, general meetings, testing) might "
         "send to the club's Q&A bot. Mostly /ask questions. Reply with ONLY a JSON list of objects "
         'like {"cmd":"ask","tier":"member","question":"..."}; tier is one of non-member, member, officer.'
@@ -702,9 +702,10 @@ def write_results(summary):
     os.replace(tmp, STATUS)
     stamp = dt.datetime.now().strftime("%Y-%m-%d %H:%M:%S,%f")[:-3]
     fails = [r for r in summary["results"] if not r["ok"]]
-    line = (f"{stamp} INFO synthetic ok {summary['passed']}/{summary['total']} gemini_calls={summary['gemini_calls']}"
+    skip = " (model skipped: rate limit)" if summary.get("gemini_skipped") else ""
+    line = (f"{stamp} INFO synthetic ok {summary['passed']}/{summary['total']} gemini_calls={summary['gemini_calls']}{skip}"
             if not fails else
-            f"{stamp} ERROR synthetic FAIL {summary['passed']}/{summary['total']} gemini_calls={summary['gemini_calls']}: "
+            f"{stamp} ERROR synthetic FAIL {summary['passed']}/{summary['total']} gemini_calls={summary['gemini_calls']}{skip}: "
             + "; ".join(f"{r['name']}: {r['detail']}" for r in fails))
     with open(BOT_LOG, "a") as f:
         f.write(line[:4000] + "\n")
@@ -725,11 +726,22 @@ def run_once(use_llm=True, connectivity_checks=True, db_src=None):
         p = provider_from_env()
         llm = CountingLLM(p) if hasattr(p, "_complete") else None
     batch = []
+    rate_limited = False
     if llm is not None:
-        try:
-            batch = gemini_batch(llm)
-        except Exception as e:
-            grader.add("gemini batch generation", False, f"{type(e).__name__}: {e}")
+        from llm import primary_exhausted
+        if primary_exhausted():
+            rate_limited = True
+        else:
+            try:
+                batch = gemini_batch(llm)
+            except Exception as e:
+                if "429" in str(e) or "exhausted" in str(e) or "quota" in str(e).casefold():
+                    rate_limited = True
+                else:
+                    grader.add("gemini batch generation", False, f"{type(e).__name__}: {e}")
+    calls_so_far = llm.calls if llm else 0
+    if rate_limited:
+        llm = None
     gen = bool(batch)
     batch = batch or [dict(x) for x in random.sample(FALLBACK_BATCH, 5)]
     if llm is not None:
@@ -750,7 +762,8 @@ def run_once(use_llm=True, connectivity_checks=True, db_src=None):
         "ok": all(r["ok"] for r in res),
         "passed": sum(r["ok"] for r in res),
         "total": len(res),
-        "gemini_calls": llm.calls if llm else 0,
+        "gemini_calls": llm.calls if llm else calls_so_far,
+        "gemini_skipped": rate_limited,
         "results": res,
     }
     return summary

@@ -17,7 +17,7 @@ def _write(root, rel, title, body):
 def kb(tmp_path, monkeypatch):
     root = tmp_path / "knowledge"
     monkeypatch.setenv("KB_BUILD_DIR", str(tmp_path / "built"))
-    _write(root, "public/where.md", "Where ACME meets", "ACME meets in the lab building building on Tuesdays.")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building building on Tuesdays.")
     _write(root, "member/budget.md", "Rocket budget", "The rocket budget for propulsion is 4000 dollars this year.")
     _write(root, "officer/roster.md", "Propulsion roster", "Current members of propulsion rocket team: Ada, Bo.")
     _write(root, "public/rocket.md", "Rocket overview", "The rocket is called Comet and it is a liquid rocket.")
@@ -58,7 +58,7 @@ class Ungrounded:
     name = "ungrounded"
 
     def answer(self, question, context_block):
-        return "ACME meets on Mars every Friday."
+        return "Example Rocketry Club meets on Mars every Friday."
 
     def check_grounded(self, question, answer, block):
         return False
@@ -66,7 +66,7 @@ class Ungrounded:
 
 def test_ungrounded_answer_becomes_dont_know(db, kb, tmp_path):
     runtime = committed_runtime(tmp_path)
-    result = handle_question(db, "Where does ACME meet?", asker_id="1", channel_id="1", channel_name="g",
+    result = handle_question(db, "Where does Example Rocketry Club meet?", asker_id="1", channel_id="1", channel_name="g",
                              visible={"1"}, here={"1"}, docs_dir=str(kb), llm=Ungrounded(),
                              runtime=runtime, asker_tier="member")
     assert result.kind == "empty"
@@ -75,7 +75,7 @@ def test_ungrounded_answer_becomes_dont_know(db, kb, tmp_path):
 
 def test_gap_phrases_are_detected():
     assert is_gap_answer("The provided documents do not state where Aurora is.")
-    assert not is_gap_answer("ACME meets on Tuesdays.")
+    assert not is_gap_answer("Example Rocketry Club meets on Tuesdays.")
 
 
 def test_rosters_stay_out_of_non_people_questions(db, kb):
@@ -84,7 +84,7 @@ def test_rosters_stay_out_of_non_people_questions(db, kb):
 
 def test_local_grounding_rejects_invented_names():
     from qa import is_grounded
-    ctx = "ACME orders liquid oxygen from Airgas."
+    ctx = "Example Rocketry Club orders liquid oxygen from Airgas."
     assert is_grounded("Liquid oxygen comes from Airgas.", ctx)
     assert not is_grounded("Liquid oxygen comes from Praxair via Bob Smith.", ctx)
 
@@ -92,7 +92,7 @@ def test_local_grounding_rejects_invented_names():
 def test_rosters_members_and_officers_yes_public_no(db, tmp_path):
     root = tmp_path / "knowledge"
     _write(root, "member/generated/roster/propulsion-roster.md", "Propulsion roster", "Current members list: Ada, Bo.")
-    _write(root, "public/where.md", "Where ACME meets", "ACME meets in the lab building.")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building.")
     for tier, sees in (("member", True), ("officer", True), ("non-member", False)):
         hits = search_docs(db, "list current members", str(root), asker_tier=tier)
         assert any("Ada" in h.text for h in hits) is sees, tier
@@ -108,13 +108,13 @@ def test_model_outage_answers_from_kb_in_backup_mode(db, tmp_path, monkeypatch):
     from llm import FALLBACK_TAG
     monkeypatch.setenv("LLM_BACKOFF_SCALE", "0")
     root = tmp_path / "knowledge"
-    _write(root, "public/where.md", "Where ACME meets", "ACME meets in the lab building on Tuesdays.")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building on Tuesdays.")
     from llm import LLMError
 
     class Down:
         def answer(self, q, c):
             raise LLMError("HTTP 500")
-    r = handle_question(db, "Where does ACME meet?", asker_id="1", channel_id="0", channel_name="x",
+    r = handle_question(db, "Where does Example Rocketry Club meet?", asker_id="1", channel_id="0", channel_name="x",
                         visible={"0"}, here={"0"}, docs_dir=str(root), llm=Down(), asker_tier="member")
     assert r.kind == "answer" and "lab" in r.text and r.text.endswith("\n" + FALLBACK_TAG)
 
@@ -124,14 +124,14 @@ def test_model_outage_without_a_match_is_an_error(db, tmp_path, monkeypatch):
     from qa import UNAVAILABLE
     root = tmp_path / "knowledge"
     monkeypatch.setenv("LLM_BACKOFF_SCALE", "0")
-    _write(root, "public/where.md", "Where ACME meets", "ACME meets in the lab building on Tuesdays.")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building on Tuesdays.")
 
     class Down:
         def answer(self, q, c):
-            raise LLMError("HTTP 429")
+            raise LLMError("HTTP 503")
     import qa
     monkeypatch.setattr(qa, "backup_answer", lambda *a, **k: "")
-    r = handle_question(db, "Where does ACME meet?", asker_id="1", channel_id="0", channel_name="x",
+    r = handle_question(db, "Where does Example Rocketry Club meet?", asker_id="1", channel_id="0", channel_name="x",
                         visible={"0"}, here={"0"}, docs_dir=str(root), llm=Down(), asker_tier="member")
     assert r.kind == "error" and r.text == UNAVAILABLE
 
@@ -172,7 +172,7 @@ def test_footer_is_one_line_of_whole_links():
 
 def test_chatter_note_is_dropped():
     from retrieve import Hit, is_chatter
-    note = Hit(kind="doc", path="member/generated/projects/x.md", title="#chan: hi", text="As of 2026-01-01, jamie is cool",
+    note = Hit(kind="doc", path="member/generated/projects/x.md", title="#chan: hi", text="As of 2026-01-01, alex is cool",
                source="https://discord.com/channels/1/2/3")
     assert is_chatter(note)
 
@@ -242,11 +242,27 @@ def test_persona_folds_in_answer_check():
 
 def test_person_questions_never_use_raw_notes():
     from retrieve import Hit, authority_filter
-    raw = Hit(kind="doc", path="member/generated/general/from-what-i-recall-jamie.md",
-              title="From what I recall Jamie sent you a heater to base the board requirements off of?",
-              text="As of 2026-02-19, From what I recall Jamie sent you a heater to base the board requirements off of and more words here today ok",
+    raw = Hit(kind="doc", path="member/generated/general/from-what-i-recall-alex.md",
+              title="From what I recall Alex sent you a heater to base the board requirements off of?",
+              text="As of 2026-02-19, From what I recall Alex sent you a heater to base the board requirements off of and more words here today ok",
               source="https://discord.com/channels/1/2/3")
-    board = Hit(kind="doc", path="public/docs/officer-boards.md", title="ACME officer boards",
-                text="Jamie Taylor: Jamie Taylor is an ACME team lead for 2026-27.", source="")
-    assert authority_filter([raw, board], "who is Jamie") == [board]
-    assert authority_filter([raw], "who is Jamie") == []
+    board = Hit(kind="doc", path="public/docs/officer-boards.md", title="Example Rocketry Club officer boards",
+                text="Alex Taylor: Alex Taylor is an Example Rocketry Club team lead for 2026-27.", source="")
+    assert authority_filter([raw, board], "who is Alex") == [board]
+    assert authority_filter([raw], "who is Alex") == []
+
+
+def test_free_tier_rate_limit_replies_busy(db, tmp_path, monkeypatch):
+    from llm import LLMError
+    from qa import BUSY
+    root = tmp_path / "knowledge"
+    monkeypatch.setenv("LLM_BACKOFF_SCALE", "0")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building on Tuesdays.")
+
+    class Busy:
+        def answer(self, q, c):
+            raise LLMError("HTTP 429")
+
+    r = handle_question(db, "Where does Example Rocketry Club meet?", asker_id="1", channel_id="0", channel_name="x",
+                        visible={"0"}, here={"0"}, docs_dir=str(root), llm=Busy(), asker_tier="member")
+    assert r.kind == "error" and r.text == BUSY

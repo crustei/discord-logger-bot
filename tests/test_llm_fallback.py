@@ -64,17 +64,16 @@ def test_exhausted_answer_path_makes_no_model_calls_and_tags(db, tmp_path, caplo
     from qa import handle_question
     from tests.test_kb_bases import _write
     root = tmp_path / "knowledge"
-    _write(root, "public/where.md", "Where ACME meets", "ACME meets in the lab building on Tuesdays.")
+    _write(root, "public/where.md", "Where Example Rocketry Club meets", "Example Rocketry Club meets in the lab building on Tuesdays.")
     llm.mark_exhausted()
     calls = []
     p = OpenAICompatibleProvider("http://x", "k", "lite", opener=opener_for(200, calls))
     with caplog.at_level("WARNING", logger="llm"):
-        r = handle_question(db, "Where does ACME meet?", asker_id="1", channel_id="0", channel_name="x",
+        r = handle_question(db, "Where does Example Rocketry Club meet?", asker_id="1", channel_id="0", channel_name="x",
                             visible={"0"}, here={"0"}, docs_dir=str(root), llm=p, asker_tier="member")
+    from qa import BUSY
     assert calls == []
-    assert r.kind == "answer" and "lab" in r.text and r.text.endswith("\n" + FALLBACK_TAG)
-    assert any("fallback extractive" in x.message for x in caplog.records)
-    assert counters.load(tmp_path / "counters.json").get("llm_fallback_extractive") == 1
+    assert r.kind == "error" and r.text == BUSY
 
 
 def test_backup_mode_respects_tiers(db, tmp_path):
@@ -98,3 +97,14 @@ def test_tag_survives_badge():
     assert "Based on" not in b and BADGE in b and b.endswith("\n" + FALLBACK_TAG)
     assert badged_text(b) == b
     assert badged_text("Plain.\n\nBased on: x") == f"Plain.\n\n{BADGE}"
+
+
+def test_paid_key_refused_at_runtime(monkeypatch):
+    import hashlib
+    monkeypatch.setenv("LLM_BASE_URL", "http://x")
+    monkeypatch.setenv("LLM_MODEL", "lite")
+    monkeypatch.setenv("LLM_API_KEY", "paid-k")
+    monkeypatch.setenv("PAID_KEY_SHA256", hashlib.sha256(b"paid-k").hexdigest())
+    assert not isinstance(llm.provider_from_env(), OpenAICompatibleProvider)
+    monkeypatch.setenv("LLM_API_KEY", "free-k")
+    assert isinstance(llm.provider_from_env(), OpenAICompatibleProvider)

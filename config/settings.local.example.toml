@@ -5,8 +5,13 @@
 # docs_visibility = "public"
 # cite_sources = true
 # officer_role = "an officer"
-# officer_channel = "officers"
-# admin_roles = ["Officers", "123456789012345678"]
+# officer_channel = "reviewers"
+# admin_roles = ["Reviewers", "YOUR_ROLE_ID"]
+# bot_name = "Example Bot"
+# org_short_name = "erc"
+# maintainer = "the maintainer"
+# info_channel_hint = "#announcements"
+# officer_role = "a reviewer"
 # python admin.py blocklist add|remove|list edits settings.local.toml.
 # python admin.py optout add|remove|list stores user ids in the local database.
 # Set optout_command = false here to turn off the /optout slash command.
@@ -14,11 +19,14 @@
 # terms_url = "https://example.test/terms"
 # privacy_url = "https://example.test/privacy"
 
-display_title = "My Org"
-org_name = "My Org"
+display_title = "Example Rocketry Club"
+org_name = "Example Rocketry Club"
+bot_name = "Example Bot"
+maintainer = "the maintainer"
+info_channel_hint = "#announcements"
 
 # Names or numeric channel ids. Empty excludes nothing.
 excluded_channels = ["private-channel"]
 
 # [blocklist.guilds]
-# "123456789012345678" = ["private-channel", "998877665544332211"]
+# "YOUR_GUILD_ID" = ["private-channel", "YOUR_CHANNEL_ID"]
