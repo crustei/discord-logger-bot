@@ -204,5 +204,12 @@ def provider_from_env() -> LLMProvider:
     key = os.environ.get("LLM_API_KEY", "").strip()
     model = os.environ.get("LLM_MODEL", "").strip()
     if base and key and model:
+        import hashlib
+
+        blocked = {h.strip().lower() for h in os.environ.get("PAID_KEY_SHA256", "").split(",") if h.strip()}
+        paid = os.environ.get("GEMINI_PAID_API_KEY", "").strip()
+        if (paid and key == paid) or hashlib.sha256(key.encode()).hexdigest() in blocked:
+            log.error("LLM_API_KEY is a reserved paid key; refusing it (free or local key only at runtime)")
+            return ExtractiveProvider()
         return OpenAICompatibleProvider(base, key, model)
     return ExtractiveProvider()

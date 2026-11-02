@@ -15,8 +15,8 @@ from voice import RuntimeConfig, get_runtime, set_runtime
 
 
 def test_invite_permissions_integer():
-    assert INVITE_PERMISSIONS == (1 << 10) + (1 << 11) + (1 << 16) + (1 << 31)
-    assert INVITE_PERMISSIONS == 2147552256
+    assert INVITE_PERMISSIONS == (1 << 6) + (1 << 10) + (1 << 11) + (1 << 14) + (1 << 16) + (1 << 31)
+    assert INVITE_PERMISSIONS == 2147568704
 
 
 def test_snowflake_id_accepts_a_missing_guild():

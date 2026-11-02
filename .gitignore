@@ -50,6 +50,7 @@ backups/
 ask_log*
 config/source_links.json
 config/settings.local.toml
-tools_local/kb/
+tools_local/kb/*
+!tools_local/kb/build.py
 tools_local/*.json
 tools_local/api_pull.py

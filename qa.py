@@ -35,6 +35,8 @@ class Result:
     approval_id: int | None = None
     llm_called: bool = False
     dry_run: bool = False
+    route: str = ""
+    det: bool = False
 
 
 def utcnow() -> str:
@@ -159,6 +161,28 @@ def is_grounded(answer: str, context_block: str, question: str = "") -> bool:
 
 
 UNAVAILABLE = "I'm temporarily unavailable. Please try again shortly."
+BUSY = "I'm busy right now, try again in a bit."
+
+
+def _busy():
+    import logging
+
+    logging.getLogger("llm").warning("llm rate_limited: replied busy (free key only, no paid fallback)")
+    try:
+        import counters
+
+        counters.bump("llm_busy_reply", quiet=True)
+    except Exception:
+        pass
+    return BUSY
+
+
+def _rate_limited(failed) -> bool:
+    """Free-tier 429 / quota / cached-exhausted: reply BUSY, with no backup answer."""
+    return any(
+        ("429" in f) or ("exhausted" in f) or ("quota" in f.casefold()) or ("resource_exhausted" in f.casefold())
+        for f in failed
+    )
 
 
 def _refusal(runtime) -> str:
@@ -268,8 +292,16 @@ def compose_answer(
         limit = runtime.max_answer_chars
     from retrieve import rerank
 
-    ranked = rerank(hits, question, llm) if question else hits
-    kept, block = select_context(ranked, limit=runtime.max_context_snippets, question=question, ranked=bool(question))
+    pinned = [h for h in hits if getattr(h, "source", "") == "fact"]
+    ranked = rerank([h for h in hits if getattr(h, "source", "") != "fact"], question, llm) if question else hits
+    if question and pinned:
+        ranked = pinned + ranked
+    kept, block = select_context(
+        ranked,
+        limit=runtime.max_context_snippets + len(pinned),
+        question=question,
+        ranked=bool(question),
+    )
     if not kept:
         return "", "", [], False
     from answerstyle import copies_source, present_answer, rephrase_request, unknown_reply
@@ -305,6 +337,8 @@ def compose_answer(
         return copies_source(body, kept) or (bool(cleaned) and copies_source(cleaned, kept))
 
     body = _ask(question)
+    if not body and failed and _rate_limited(failed):
+        return _busy(), block, kept, False
     if not body and failed:
         text = backup_answer(question, kept, runtime, limit, failed[-1])
         return (text or UNAVAILABLE), block, kept, False
@@ -313,6 +347,8 @@ def compose_answer(
         n_failed = len(failed)
         body = _ask(rephrase_request(question))
         called = True
+        if not body and len(failed) > n_failed and _rate_limited(failed[n_failed:]):
+            return _busy(), block, kept, False
         if not body and len(failed) > n_failed:
             text = backup_answer(question, kept, runtime, limit, failed[-1])
             if text:
@@ -327,7 +363,7 @@ def compose_answer(
     return text, block, kept, called
 
 
-def handle_question(
+def _handle_question(
     conn,
     question: str,
     *,
@@ -376,6 +412,19 @@ def handle_question(
             context_block="",
             text=clip(runtime.say("empty_question"), limit),
         )
+    import router
+
+    route = router.classify(question)
+    fixed = router.fixed_reply(route)
+    if fixed:
+        return Result(
+            kind="answer",
+            reason=f"fixed reply ({route})",
+            context_block="",
+            text=clip(fixed, limit),
+            route=route,
+            det=True,
+        )
     scope = set(visible) | set(here) | set(public_channels)
     found = retrieve(
         conn,
@@ -398,8 +447,47 @@ def handle_question(
         here=set(here),
         public=set(public_channels),
     )
-    if auto:
-        kept, block = select_context(auto, limit=runtime.max_context_snippets, question=question)
+    pinned = router.fact_lines(question, docs_dir, asker_tier)
+    candidates = list(auto) + list(review)
+    score = router.match_score(question, pinned + candidates)
+    if score < router.MATCH_MIN and not review:
+        from answerstyle import unknown_reply
+
+        if not dry_run or os.environ.get("GAP_LOG"):
+            router.log_gap(question, route, score, asker_tier)
+        text = unknown_reply(runtime) if route != "remark" else router.remark_reply()
+        return Result(
+            kind="empty",
+            reason=f"below match threshold ({score:.2f})",
+            context_block="",
+            text=clip(text, limit),
+            route=route,
+            det=True,
+            dry_run=dry_run,
+        )
+    if auto or pinned:
+        from retrieve import authority_filter, most_relevant_first
+
+        prepared = most_relevant_first(authority_filter(list(auto), question), question) if question else list(auto)
+        if pinned:
+            rest, _block = select_context(prepared, limit=runtime.max_context_snippets, question=question, ranked=True)
+            ordered = router.order_with_chat_last(pinned, rest, question)
+            kept, block = select_context(
+                ordered,
+                limit=runtime.max_context_snippets + len(pinned),
+                question=question,
+                ranked=True,
+            )
+            auto = ordered
+        else:
+            ordered = router.order_with_chat_last([], prepared, question)
+            kept, block = select_context(
+                ordered,
+                limit=runtime.max_context_snippets,
+                question=question,
+                ranked=True,
+            )
+            auto = ordered
         reason = explain("answer", str(asker_id), review)
         if dry_run:
             return Result(
@@ -414,9 +502,16 @@ def handle_question(
         if llm is None:
             llm = ExtractiveProvider()
         text, block, kept, called = compose_answer(question, auto, llm, runtime=runtime, limit=limit)
-        if text == UNAVAILABLE:
-            return Result(kind="error", reason="The model was unavailable after retries.",
-                          context_block=block, snippets=kept, text=UNAVAILABLE, llm_called=False)
+        if text in (UNAVAILABLE, BUSY):
+            return Result(
+                kind="error",
+                reason=("free-tier rate limit (busy)" if text == BUSY else "The model was unavailable after retries."),
+                context_block=block,
+                snippets=kept,
+                text=text,
+                llm_called=False,
+                route=route,
+            )
         if called and not _is_refusal(text, runtime, limit):
             if not is_grounded(text, block, question):
                 from answerstyle import unknown_reply
@@ -490,7 +585,41 @@ def handle_question(
         reason=explain("empty", str(asker_id), []),
         context_block="",
         text=clip(_refusal(runtime), limit),
+        route=route,
     )
+
+
+def _nonempty(res: Result, question: str, runtime) -> Result:
+    """No reply is ever blank: fall back to a knowledge-only answer, then a self-description."""
+    if (res.text or "").strip() or res.dry_run:
+        return res
+    import router
+
+    limit = getattr(runtime, "max_answer_chars", 1900)
+    text = ""
+    if res.snippets:
+        try:
+            text = backup_answer(question, res.snippets, runtime, limit, "blank model reply") or ""
+        except Exception:
+            text = ""
+    if not text.strip():
+        route = res.route or router.classify(question or "")
+        bot_name = getattr(runtime, "bot_name", "") or ""
+        if route in ("identity", "self", "other", "remark", "people") and router.mentions_self(question or "", bot_name):
+            text = router.fixed_reply("self") or ""
+        else:
+            from answerstyle import unknown_reply
+
+            text = unknown_reply(runtime) or router.remark_reply()
+            res.kind = "empty"
+    res.text = clip(text, limit)
+    res.reason = (res.reason or "") + " [blank reply replaced]"
+    return res
+
+
+def handle_question(conn, question: str = "", *args, **kwargs) -> Result:
+    res = _handle_question(conn, question, *args, **kwargs)
+    return _nonempty(res, question, kwargs.get("runtime") or get_runtime())
 
 
 def answer_in_new_connection(db_path: str, **kwargs) -> Result:

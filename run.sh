@@ -17,4 +17,10 @@ if [ -x .venv/bin/python ]; then
 else
   PY=python3
 fi
+if [ "${1:-}" = "reindex" ]; then
+  exec "$PY" -c 'import db, os, retrieve
+c = db.connect(os.environ.get("BOT_DB", "bot.db"))
+retrieve.refresh_docs(c, os.environ.get("DOCS_DIR", "knowledge"))
+print("reindexed")'
+fi
 exec "$PY" bot.py

@@ -8,10 +8,10 @@
     python admin.py blocklist add private-channel
     python admin.py blocklist add --guild 123456789 officers
     python admin.py blocklist remove private-channel
-    python admin.py forget 123456789012345678
+    python admin.py forget YOUR_USER_ID
     python admin.py optout list
-    python admin.py optout add 123456789012345678
-    python admin.py optout remove 123456789012345678
+    python admin.py optout add YOUR_USER_ID
+    python admin.py optout remove YOUR_USER_ID
 
 Approving is the only path that calls the model and posts the answer.
 The context stored on the row is filtered again before that call.

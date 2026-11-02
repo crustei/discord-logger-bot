@@ -1,5 +1,5 @@
 flowchart LR
-  subgraph Discord["Discord (ACME guild)"]
+  subgraph Discord["Discord (your server)"]
     GW[Gateway + REST API]
   end
   subgraph GCP["GCP project your-gcp-project · us-west1-b"]
@@ -16,7 +16,6 @@ flowchart LR
   GEM[(Google Gemini API)]
   subgraph BOX["Box (Grok Bot host)"]
     RB["Frozen rollback copy<br/>MIGRATED marker blocks start"]
-    PULL["pull_from_vm.sh → vm_mirror/"]
     PUSH["push_knowledge.sh<br/>(add/update + live reindex)"]
     HB["heartbeat_check.sh → heartbeat_check_gcp.sh"]
     RT["Routines: nightly check-in ~8 PM PT (always reports)<br/>Saturday recap"]
@@ -34,9 +33,7 @@ flowchart LR
   WK --> FILES
   WK --> DB
   RT --> HB
-  RT --> PULL
   RT --> DRV
   RT --> PUSH
-  PULL -.->|gcloud ssh via IAP tunnel only| VM
   PUSH -.->|IAP SSH| KB
   HB -.->|IAP SSH| FILES

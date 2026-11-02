@@ -105,8 +105,8 @@ class _StubLLM:
         return self._answer
 
 
-def check_pipeline(db_path, docs_dir, question="Who is Jamie?",
-                   answer="Jamie Taylor is an ACME team lead for 2026-27.", tiers=("non-member", "member", "officer")):
+def check_pipeline(db_path, docs_dir, question="Who is Alex?",
+                   answer="Alex Rivera is an Example Rocketry Club team lead for 2026-27.", tiers=("non-member", "member", "officer")):
     from answerstyle import expand_terms
     from kb_bases import base_for
     from qa import answer_in_new_connection

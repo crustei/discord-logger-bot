@@ -111,6 +111,74 @@ DEFAULT_SENSITIVE = (
     "home address",
 )
 
+DEFAULT_DOMAIN_TERMS = (
+    "meeting",
+    "lead",
+    "engine",
+    "rocket",
+    "launch",
+    "team",
+    "member",
+    "project",
+    "payload",
+    "subteam",
+    "gm",
+)
+
+DEFAULT_BOOST_PAGES = (
+    "lore",
+    "leadership-current",
+    "leads-and-roles",
+    "about-the-bot",
+    "project-specs",
+)
+
+DEFAULT_TYPOS = {
+    "cheif": "chief",
+    "engineeer": "engineer",
+}
+
+DEFAULT_REPLIES = {
+    "identity": (
+        "I'm {bot_name}, the {org_name} Discord assistant. Reviewers run me. "
+        "Ask me about projects, leads, or meetings."
+    ),
+    "greeting": "Hi! I'm {bot_name}. Ask me about {org_name} projects, leads, or meetings.",
+    "sensitive": (
+        "I can't help with personal or private details. I don't share contact info or private records. "
+        "Ask a reviewer directly."
+    ),
+    "optout_list": (
+        "The opt-out list is private, so I can't share who is on it. Anyone can opt out by running /optout "
+        "(only you see the confirmation); it stops the bot storing your messages and deletes its copies."
+    ),
+    "find_info": (
+        "You can ask me ({bot_name}) with /ask. Official news and meeting times are in {info_channel_hint}, "
+        "and membership questions go to {maintainer}."
+    ),
+    "self": (
+        "I'm {bot_name}, the {org_name} Discord Q&A bot, built and maintained by {maintainer}. "
+        "Ask me with /ask or an @mention about projects, teams, meeting times, leads, and events; "
+        "I answer from the docs and Discord and cite sources."
+    ),
+    "whoami": (
+        "I don't track who's asking. Check your Discord profile and server roles (click your name) "
+        "to see your name, team, and access."
+    ),
+    "private": (
+        "I don't share personal details about members (where someone lives, their contact info, and so on). "
+        "Ask them directly or check the roster with a reviewer."
+    ),
+    "offtopic": (
+        "I'm here for {org_name} questions, so I'll skip that one. "
+        "Try asking about a project, team meeting time, lead, or event."
+    ),
+    "remark": (
+        "I'm here for {org_name} questions. I don't know how to reply to that one. "
+        "Try asking about a project, lead, or meeting."
+    ),
+}
+
 
 def _visibility(value) -> str:
     text = str(value or "").strip().casefold()
@@ -223,6 +291,15 @@ class RuntimeConfig:
         self.officer_role = "an officer"
         self.officer_channel = ""
         self.sensitive_topics: list[str] = list(DEFAULT_SENSITIVE)
+        self.bot_name = "Bot"
+        self.org_short_name = ""
+        self.maintainer = "the maintainer"
+        self.info_channel_hint = "#announcements"
+        self.domain_terms: list[str] = list(DEFAULT_DOMAIN_TERMS)
+        self.boost_pages: list[str] = list(DEFAULT_BOOST_PAGES)
+        self.meeting_page = "meeting-times"
+        self.typo_aliases: dict[str, str] = dict(DEFAULT_TYPOS)
+        self.replies: dict[str, str] = dict(DEFAULT_REPLIES)
         self.last_error = ""
         self._stamp: tuple[str, str, str] | None = None
         self._file_lock = threading.Lock()
@@ -290,6 +367,30 @@ class RuntimeConfig:
             self.sensitive_topics = _role_list(data.get("sensitive_topics"))
         else:
             self.sensitive_topics = list(DEFAULT_SENSITIVE)
+        self.bot_name = _one_line(data.get("bot_name"), self.display_title or "Bot", 80)
+        self.org_short_name = _one_line(data.get("org_short_name"), "", 40).casefold()
+        self.maintainer = _one_line(data.get("maintainer"), "the maintainer", 120)
+        self.info_channel_hint = _one_line(data.get("info_channel_hint"), "#announcements", 80)
+        self.domain_terms = _role_list(data.get("domain_terms")) if "domain_terms" in data else list(DEFAULT_DOMAIN_TERMS)
+        self.boost_pages = _role_list(data.get("boost_pages")) if "boost_pages" in data else list(DEFAULT_BOOST_PAGES)
+        self.meeting_page = _one_line(data.get("meeting_page"), "meeting-times", 80)
+        aliases = data.get("typo_aliases")
+        if isinstance(aliases, dict):
+            self.typo_aliases = {
+                str(key).casefold(): str(value).casefold()
+                for key, value in aliases.items()
+                if str(key).strip() and str(value).strip()
+            }
+        else:
+            self.typo_aliases = dict(DEFAULT_TYPOS)
+        replies = data.get("replies")
+        merged = dict(DEFAULT_REPLIES)
+        if isinstance(replies, dict):
+            for key, value in replies.items():
+                text = str(value or "").strip()
+                if text:
+                    merged[str(key)] = text
+        self.replies = merged
 
     @property
     def excluded_channels(self) -> Blocklist:

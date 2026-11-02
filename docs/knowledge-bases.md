@@ -10,8 +10,8 @@ Officers and executives share one tier.
 
 | Tier | Roles |
 |---|---|
-| officer | President, Vice President, Officer, Team Lead (examples; set in config/tiers.toml) |
-| member | Member, Alumni |
+| officer (reviewer) | President, Vice President, Officer, Team Lead, Reviewer (examples; set in config/tiers.toml) |
+| member | Member, Alumni, Supporter |
 | non-member | Guest, and any unlisted role |
 
 ## Source folders (author here; one entry lives in one folder only)
@@ -20,6 +20,7 @@ Officers and executives share one tier.
 - `knowledge/officer/` officer/executive channels, rosters, internal data
 
 `tools_local/kb/build.py` writes extracted entries into `<folder>/generated/`.
+It reads JSON from `tools_local/kb/raw_local/` (not committed) and takes the guild id from `GUILD_ID`.
 An entry's folder is the most restrictive tier among its source channels.
 
 ## Role bases (generated at index time, `data/kb/`)

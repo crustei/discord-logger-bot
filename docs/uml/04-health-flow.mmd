@@ -20,10 +20,9 @@ sequenceDiagram
   SY->>F: "ok 25/25" or FAIL line
   WK->>F: trim bot.log, DB maintenance if needed
   RT->>VM: heartbeat_check_gcp.sh
-  RT->>VM: pull_from_vm.sh → vm_mirror/
-  RT->>RT: scan changed Drive docs (example.edu)
+  RT->>RT: scan changed docs from the operator's export
   opt knowledge changed
     RT->>VM: push_knowledge.sh (add/update, live reindex)
   end
   RT->>E: short report every night (health, additions, issues)
-  Note over RT: Saturday recap uses same pull/push path
+  Note over RT: Saturday recap uses the same push path
