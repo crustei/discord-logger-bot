@@ -42,9 +42,13 @@ def isolate_runtime(monkeypatch, tmp_path):
         "SNAPSHOT_HOURS",
         "GUILD_IDS",
         "GUILD_ID",
+        "PAID_KEY_SHA256",
+        "GEMINI_PAID_API_KEY",
+        "MATCH_MIN",
     ):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("BOT_LOG", str(tmp_path / "bot.log"))
+    monkeypatch.setenv("GAP_LOG", str(tmp_path / "gap_log.jsonl"))
     voice.set_runtime(None)
     yield
     voice.set_runtime(None)

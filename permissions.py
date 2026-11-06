@@ -14,9 +14,9 @@ from __future__ import annotations
 
 from blocklist import ensure_blocklist, norm_name
 
-# View Channels + Send Messages + Read Message History + Use Application Commands.
-# Keep this equal to the integer in the README invite URL.
-INVITE_PERMISSIONS = (1 << 10) + (1 << 11) + (1 << 16) + (1 << 31)
+# View Channels + Send Messages + Embed Links + Add Reactions + Read Message History
+# + Use Application Commands. Keep this equal to the integer in the README invite URL.
+INVITE_PERMISSIONS = (1 << 6) + (1 << 10) + (1 << 11) + (1 << 14) + (1 << 16) + (1 << 31)
 
 
 def is_excluded(channel_id, channel_name, excluded=None, guild_id=None) -> bool:

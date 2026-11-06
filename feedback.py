@@ -15,7 +15,8 @@
   sources and show "✅ Verified by officers". That edit is not written to any
   log; a failed edit only logs an error.
 Buttons use custom_id "qav:<ask_id>:<vote>" (DynamicItem), so they survive
-restarts. No Gemini calls.
+restarts. Reviewers can also rate an @mention answer with ✅ / ❌ reactions
+(one vote per person; removing the reaction removes that vote). No model calls.
 """
 from __future__ import annotations
 
@@ -105,6 +106,60 @@ def record_vote(conn, ask_id: int, user_id, tier: str, vote: str, note: str | No
     )
     conn.commit()
     return "changed" if old else "saved"
+
+
+REACTION_VOTES = {"✅": "yes", "❌": "no"}
+
+
+def reaction_vote(emoji) -> str | None:
+    """'yes' or 'no' for the rating reactions, else None."""
+    return REACTION_VOTES.get(str(emoji or ""))
+
+
+def remove_vote(conn, ask_id: int, user_id, vote: str | None = None) -> bool:
+    """Delete this rater's vote on an answer (only if it equals ``vote`` when given)."""
+    ensure_table(conn)
+    key = voter_key(conn, user_id)
+    sql, args = "DELETE FROM ask_feedback WHERE ask_id=? AND voter=?", [int(ask_id), key]
+    if vote is not None:
+        sql += " AND vote=?"
+        args.append(vote)
+    cur = conn.execute(sql, args)
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def reaction_in_new_connection(db_path, message_id, user_id, tier, emoji, added: bool):
+    """Reviewer ✅/❌ reaction on a linked answer. Returns (outcome, ask_id, badge_targets).
+
+    outcome: 'ignored', 'not_officer', 'opted_out', 'saved', 'changed', 'removed',
+    'unchanged', 'no_question', or 'error'. One vote per person; the latest wins.
+    """
+    from db import connect
+    from tiers import is_officer
+
+    vote = reaction_vote(emoji)
+    if vote is None:
+        return "ignored", None, []
+    if not is_officer(tier):
+        return "not_officer", None, []
+    conn = connect(db_path)
+    try:
+        rid = ask_id_for_message(conn, message_id)
+        if rid is None:
+            return "ignored", None, []
+        if added:
+            outcome = record_vote(conn, rid, user_id, tier, vote)
+            if outcome not in ("saved", "changed"):
+                return outcome, rid, []
+            counts = tally(conn, rid)
+            return outcome, rid, (messages_for(conn, rid) if is_verified(counts) else [])
+        return ("removed" if remove_vote(conn, rid, user_id, vote) else "unchanged"), rid, []
+    except Exception:
+        log.exception("feedback reaction failed")
+        return "error", None, []
+    finally:
+        conn.close()
 
 
 def tally(conn, ask_id: int) -> dict:

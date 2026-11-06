@@ -145,7 +145,7 @@ def tokens_for(question: str) -> list[str]:
     for token in re.findall(r"[0-9A-Za-z]{2,}", question.lower()):
         if token not in raw:
             raw.append(token)
-    useful = [token for token in raw if token not in STOPWORDS]
+    useful = [token for token in raw if token not in active_stopwords()]
     return (useful or raw)[:12]
 
 
@@ -581,14 +581,43 @@ def format_chunk(index: int, hit: Hit) -> str:
 
 
 _STOP = {"what", "when", "where", "which", "who", "whom", "whose", "does", "did", "the", "and", "for",
-         "with", "from", "that", "this", "acme", "club's", "is", "are", "was", "were", "how", "many", "much"}
+         "with", "from", "that", "this", "club's", "is", "are", "was", "were", "how", "many", "much"}
+
+
+def active_stopwords() -> set[str]:
+    """Built-in stopwords plus the configured organization short name, when set."""
+    extra: set[str] = set()
+    try:
+        from voice import get_runtime
+
+        short = (getattr(get_runtime(), "org_short_name", "") or "").casefold().strip()
+        if short:
+            extra.add(short)
+    except Exception:
+        pass
+    return set(STOPWORDS) | extra
+
+
+def _stop_words() -> set[str]:
+    extra: set[str] = set()
+    try:
+        from voice import get_runtime
+
+        short = (getattr(get_runtime(), "org_short_name", "") or "").casefold().strip()
+        if short:
+            extra.add(short)
+            extra.add(short + "'s")
+    except Exception:
+        pass
+    return set(_STOP) | extra
 
 
 def _q_terms(question: str) -> set[str]:
     words = re.findall(r"[a-z0-9][a-z0-9'-]{2,}", (question or "").casefold())
     from answerstyle import expand_terms
     words += [w for w in expand_terms(question or "") if len(w) >= 2]
-    return {w.rstrip("'s")[:6] for w in words if w not in _STOP}
+    stop = _stop_words()
+    return {w.rstrip("'s")[:6] for w in words if w not in stop}
 
 
 def most_relevant_first(hits: list[Hit], question: str) -> list[Hit]:
@@ -705,7 +734,7 @@ def authority_filter(hits: list[Hit], question: str) -> list[Hit]:
         hits = [h for h in hits if not is_raw_note(h)]
     subject = definition_subject(question) if re.search(r"(?i)^\s*who\b", question or "") else ""
     if subject:
-        names = [w for w in re.findall(r"[a-z0-9]{3,}", subject.casefold()) if w not in _STOP]
+        names = [w for w in re.findall(r"[a-z0-9]{3,}", subject.casefold()) if w not in _stop_words()]
         if names:
             def names_subject(h: Hit) -> bool:
                 hay = ((h.text or "") + " " + (h.title or "")).casefold()

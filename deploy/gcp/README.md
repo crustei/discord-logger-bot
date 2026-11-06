@@ -7,12 +7,12 @@ bot.log as the single master log (no logrotate), weekly trim + DB maintenance (s
 ## Steps (owner does 1-3; the rest are scripts)
 1. Sign in to the Google account at console.cloud.google.com, create a project, link a billing account
    (needed even for Always Free). On the box: `~/google-cloud-sdk/bin/gcloud auth login --no-launch-browser`
-   and `gcloud config set project <PROJECT>`.
-2. `export PROJECT=<project-id>`
+   and `gcloud config set project <PROJECT_ID>`.
+2. `export PROJECT_ID=<project-id>` and, if you want, `export VM_NAME=<vm-name> ZONE=<zone>`
 3. `BILLING_ACCOUNT=$(gcloud billing accounts list --format='value(name)' | head -1) ./budget.sh`
 4. `./create_vm.sh`
 5. `./sync_code.sh && ./sync_data.sh`
-6. `gcloud compute ssh discord-bot --zone us-west1-b --tunnel-through-iap --command 'sudo bash /opt/discord-bot/deploy/gcp/provision.sh'`
+6. `gcloud compute ssh "$VM_NAME" --zone "$ZONE" --tunnel-through-iap --command 'sudo bash /opt/discord-bot/deploy/gcp/provision.sh'`
 7. `./cutover.sh`  (stops the box bot, final online DB backup, starts the VM bot, verifies; ~1-3 min downtime)
 8. Point the hourly heartbeat routine at `deploy/gcp/heartbeat_check_gcp.sh` (same output format).
 

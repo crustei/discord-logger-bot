@@ -187,3 +187,70 @@ def test_fallback_matches_pre_link_answer_once(tmp_path):
     _ask(conn, "dup")  # second identical answer -> ambiguous
     assert feedback.find_by_content(conn, "Fridays.", now) is None
     assert other
+
+
+def _linked(tmp_path):
+    db = str(tmp_path / "r.db")
+    conn = connect(db)
+    rid = _ask(conn)
+    feedback.link_message(conn, rid, 555, 77)
+    return db, conn, rid
+
+
+def test_reaction_officer_yes_no_latest_wins_and_remove(tmp_path):
+    from feedback import reaction_in_new_connection as r
+    db, conn, rid = _linked(tmp_path)
+    assert r(db, 555, 10, "officer", "✅", True)[0] == "saved"
+    assert r(db, 555, 10, "officer", "❌", True)[0] == "changed"
+    t = tally(conn, rid)
+    assert (t["yes"], t["no"], t["votes"]) == (0, 1, 1)
+    # removing the stale check mark leaves the latest no vote alone
+    assert r(db, 555, 10, "officer", "✅", False)[0] == "unchanged"
+    assert tally(conn, rid)["no"] == 1
+    assert r(db, 555, 10, "officer", "❌", False)[0] == "removed"
+    assert tally(conn, rid)["votes"] == 0
+    stored = [row[0] for row in conn.execute("SELECT voter FROM ask_feedback")]
+    assert "10" not in stored
+
+
+def test_reaction_non_officer_other_emoji_unlinked_ignored(tmp_path):
+    from feedback import reaction_in_new_connection as r
+    db, conn, rid = _linked(tmp_path)
+    assert r(db, 555, 5, "member", "✅", True)[0] == "not_officer"
+    assert r(db, 555, 10, "officer", "👍", True)[0] == "ignored"
+    assert r(db, 999, 10, "officer", "✅", True)[0] == "ignored"
+    assert tally(conn, rid)["votes"] == 0
+
+
+def test_reaction_same_hash_as_buttons_and_verified(tmp_path, monkeypatch):
+    from feedback import reaction_in_new_connection as r
+    monkeypatch.setattr(feedback, "thresholds", lambda: (2, 0))
+    db, conn, rid = _linked(tmp_path)
+    record_vote(conn, rid, 10, "officer", "no")
+    assert r(db, 555, 10, "officer", "✅", True)[0] == "changed"
+    out, _, targets = r(db, 555, 11, "officer", "✅", True)
+    assert out == "saved" and targets == [("555", "77")]
+
+
+def test_bot_reaction_handler_filters(tmp_path, monkeypatch):
+    import types
+    import bot as botmod
+    calls = []
+    monkeypatch.setattr(feedback, "reaction_in_new_connection",
+                        lambda *a: calls.append(a) or ("saved", 1, []))
+    fake = types.SimpleNamespace(user=types.SimpleNamespace(id=1), cfg=types.SimpleNamespace(db_path="x"),
+                                 _watching=lambda g: True, get_guild=lambda g: None)
+
+    def pl(uid, emoji, member):
+        return types.SimpleNamespace(user_id=uid, guild_id=9, message_id=555, emoji=emoji, member=member)
+
+    officer = object()
+    monkeypatch.setattr(botmod, "member_tier", lambda m: "officer" if m is officer else "member")
+    h = botmod.QABot._handle_rating_reaction
+    asyncio.run(h(fake, pl(1, "✅", officer), True))
+    asyncio.run(h(fake, pl(2, "✅", object()), True))
+    asyncio.run(h(fake, pl(3, "🎉", officer), True))
+    assert calls == []
+    asyncio.run(h(fake, pl(3, "✅", officer), True))
+    asyncio.run(h(fake, pl(3, "❌", officer), False))
+    assert [(c[2], c[4], c[5]) for c in calls] == [(3, "✅", True), (3, "❌", False)]

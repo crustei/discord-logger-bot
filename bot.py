@@ -11,8 +11,9 @@ Leave it unset to watch every server the bot is invited to. Guild-scoped sync
 clears leftover global commands, and global sync clears leftover guild commands,
 so an earlier scope does not leave a duplicate set in the picker.
 
-Invite bits: View Channels, Send Messages, Read Message History, Use Application
-Commands. The integer is permissions.INVITE_PERMISSIONS (2147552256).
+Invite bits: View Channels, Send Messages, Embed Links, Add Reactions, Read
+Message History, Use Application Commands. The integer is
+permissions.INVITE_PERMISSIONS.
 """
 from __future__ import annotations
 
@@ -162,6 +163,7 @@ class QABot(discord.Client):
         intents.guild_messages = True
         intents.message_content = True
         intents.members = True
+        intents.guild_reactions = True
         super().__init__(intents=intents)
         self.cfg = load_config()
         self.started_at = dt.datetime.now(dt.timezone.utc)
@@ -623,8 +625,68 @@ class QABot(discord.Client):
         async with message.channel.typing():
             text, rid = await self._answer_with_id(question, message.guild, message.author, message.channel)
         sent = await message.reply(text[:2000], mention_author=False)
-        # Mentions have no ephemeral channel; officers rate them via Apps > Verify answer.
+        # Mentions have no ephemeral channel; reviewers rate them with ✅/❌ reactions
+        # (or Apps > Verify answer).
         await self._after_answer(rid, sent, message.channel, message.author, None)
+        if rid is not None:
+            await self._add_rating_reactions(sent)
+
+    async def _add_rating_reactions(self, sent) -> None:
+        from feedback import REACTION_VOTES
+
+        for emoji in REACTION_VOTES:
+            try:
+                await sent.add_reaction(emoji)
+            except Exception:
+                log.warning("feedback: could not add %s reaction (needs Add Reactions)", emoji, exc_info=True)
+
+    async def on_raw_reaction_add(self, payload) -> None:
+        await self._handle_rating_reaction(payload, added=True)
+
+    async def on_raw_reaction_remove(self, payload) -> None:
+        await self._handle_rating_reaction(payload, added=False)
+
+    async def _handle_rating_reaction(self, payload, added: bool) -> None:
+        """Reviewer ✅/❌ on a linked answer is one yes/no vote. Other reactions stay put."""
+        from feedback import apply_badge, reaction_in_new_connection, reaction_vote
+
+        if payload.user_id == getattr(self.user, "id", None) or payload.guild_id is None:
+            return
+        if not self._watching(payload.guild_id) or reaction_vote(payload.emoji) is None:
+            return
+        member = getattr(payload, "member", None)
+        if member is None:
+            guild = self.get_guild(payload.guild_id)
+            member = guild.get_member(payload.user_id) if guild is not None else None
+            if member is None and guild is not None:
+                try:
+                    member = await guild.fetch_member(payload.user_id)
+                except Exception:
+                    member = None
+        if member is None or getattr(member, "bot", False):
+            return
+        tier = member_tier(member)
+        if not is_officer(tier):
+            return
+        outcome, rid, targets = await asyncio.to_thread(
+            reaction_in_new_connection,
+            self.cfg.db_path,
+            payload.message_id,
+            payload.user_id,
+            tier,
+            str(payload.emoji),
+            added,
+        )
+        if outcome in ("saved", "changed", "removed"):
+            log.info(
+                "feedback: reviewer reaction rating %s on ask %s (%s %s)",
+                outcome,
+                rid,
+                "added" if added else "removed",
+                reaction_vote(payload.emoji),
+            )
+        if targets:
+            await apply_badge(self, targets)
 
     async def _after_answer(self, rid, sent, channel, user, ephemeral_send) -> None:
         """Link the public answer to its ask_log row; officers who used /ask get a private rating prompt."""

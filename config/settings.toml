@@ -11,6 +11,37 @@ display_title = "Discord bot"
 # Used in slash-command text and in the {org_name} persona placeholder.
 org_name = "My Org"
 
+# Name the bot uses for identity replies and self-reference matching.
+bot_name = "Example Bot"
+
+# Short token treated as a stopword (an acronym such as "erc"). Leave blank to skip.
+org_short_name = ""
+
+# Shown in built-in replies. Not a secret and not a real person.
+maintainer = "the maintainer"
+
+# Where members should look for announcements. A channel name, not an id.
+info_channel_hint = "#announcements"
+
+# Fact-page file stems (knowledge/<tier>/docs/<stem>.md) that outrank raw chat.
+meeting_page = "meeting-times"
+boost_pages = ["lore", "leadership-current", "leads-and-roles", "about-the-bot", "project-specs"]
+
+# Words that keep a question on-topic for this community. Each entry is a regex fragment.
+domain_terms = [
+  "meeting",
+  "lead",
+  "engine",
+  "rocket",
+  "launch",
+  "team",
+  "member",
+  "project",
+  "payload",
+  "subteam",
+  "gm",
+]
+
 # Custom status under the bot's name. Shown as written, up to 128 characters.
 status_text = "Always listening... | /help"
 
@@ -47,11 +78,12 @@ docs_visibility = "public"
 # Append "Based on: <title or #channel>, <date>" to answers.
 cite_sources = true
 
-# Used when the bot does not know. officer_channel is a name, not a link.
+# Used when the bot does not know. This is the reviewer role.
+# officer_channel is a name, not a link, and may stay empty.
 officer_role = "an officer"
 officer_channel = ""
 
-# Questions that mention these topics wait for an officer.
+# Questions that mention these topics wait for a reviewer.
 sensitive_topics = [
   "grade",
   "grades",
@@ -75,4 +107,8 @@ public_channels = []
 # Optional per-server blocklist. Keys are guild ids. Values are names or channel ids.
 # python admin.py blocklist add --guild GUILD_ID private-channel
 # [blocklist.guilds]
-# "123456789012345678" = ["private-channel", "998877665544332211"]
+# "YOUR_GUILD_ID" = ["private-channel", "YOUR_CHANNEL_ID"]
+
+[typo_aliases]
+cheif = "chief"
+engineeer = "engineer"
