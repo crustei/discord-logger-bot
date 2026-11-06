@@ -5,7 +5,7 @@ An empty blocklist skips nothing. Usage: python backfill.py [paths or dirs ...]
 (default: known export locations)"""
 import glob, json, os, sys
 from db import connect, purge_excluded, upsert_message
-DEFAULT = ["/cursor/stores/store-3d5ea2e7-2610-40af-bffd-c0a1c06d7b4c/grok-bot/agents/*/attachments", "/workspace/discord_exports"]
+DEFAULT = ["./exports", "/workspace/discord_exports"]
 def files(args):
     out = []
     for a in args or DEFAULT:
